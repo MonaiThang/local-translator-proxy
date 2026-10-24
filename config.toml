@@ -1,0 +1,17 @@
+[server]
+listen_addr = "127.0.0.1:5000"
+
+[model_runtime]
+endpoint = "http://127.0.0.1:11434/api/chat"
+model = "gemma2:9b"
+timeout_secs = 5
+max_in_flight = 4
+seed = 12345
+
+[languages]
+supported_pairs = [["zh-CN", "en"]]
+default_from = "zh-CN"
+default_to = "en"
+
+[prompt]
+system_message = "You are a translation engine. Translate the user's text between the requested languages. Return ONLY the translated text in the required structured format. Preserve every XML/HTML tag, sprite/quad token, and escaped line break exactly as-is, with identical count and order. Do not add explanations, notes, or extra text."
