@@ -1,17 +1,27 @@
+# Translation Proxy v1 configuration.
+# Every value has a default; environment variables (TRANSLATOR_PROXY_*) override
+# the corresponding key. See README.md for the full list.
+
 [server]
+# Loopback only. The game calls http://127.0.0.1:5000.
 listen_addr = "127.0.0.1:5000"
 
 [model_runtime]
+# Ollama-compatible non-streaming chat endpoint.
 endpoint = "http://127.0.0.1:11434/api/chat"
 model = "gemma2:9b"
+# Deadline for one whole Translation Unit, in seconds.
 timeout_secs = 5
+# Maximum concurrent calls to the Model Runtime.
 max_in_flight = 4
 seed = 12345
 
 [languages]
+# Fixed allowlist of source-to-target pairs. No aliases in v1.
 supported_pairs = [["zh-CN", "en"]]
 default_from = "zh-CN"
 default_to = "en"
 
 [prompt]
+# The proxy appends the requested source and target language to this message.
 system_message = "You are a translation engine. Translate the user's text between the requested languages. Return ONLY the translated text in the required structured format. Preserve every XML/HTML tag, sprite/quad token, and escaped line break exactly as-is, with identical count and order. Do not add explanations, notes, or extra text."

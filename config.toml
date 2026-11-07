@@ -1,3 +1,7 @@
+# Translation Proxy v1 configuration.
+# Local values; copy config.example.toml for a documented template.
+# Environment variables (TRANSLATOR_PROXY_*) override these values.
+
 [server]
 listen_addr = "127.0.0.1:5000"
 
