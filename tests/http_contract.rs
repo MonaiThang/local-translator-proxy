@@ -135,3 +135,20 @@ fn unknown_parameters_are_ignored() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body, "hello");
 }
+
+#[test]
+fn unsupported_pair_is_a_200_passthrough() {
+    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+    let (status, content_type, body) = runtime.block_on(get("/?text=hello&from=en&to=zh-CN"));
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(content_type, "text/plain; charset=utf-8");
+    assert_eq!(body, "hello");
+}
+
+#[test]
+fn invalid_language_tag_is_a_200_passthrough() {
+    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+    let (status, _, body) = runtime.block_on(get("/?text=hello&from=zh_CN&to=en"));
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, "hello");
+}
