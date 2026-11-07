@@ -19,9 +19,12 @@ the MVP `text` / `from` / `to` query parameters.
 
 ```sh
 cargo build --release
-cp config.example.toml config.toml   # optional; defaults work without a file
 cargo run --release
 ```
+
+`config.toml` is tracked with working defaults, so a fresh clone runs without
+extra setup. Edit it directly for local changes; `config.example.toml` is the
+fully documented template.
 
 The proxy starts on `127.0.0.1:5000` unless `config.toml` or an environment
 override says otherwise. Logging is controlled by `RUST_LOG` (default `info`):
@@ -40,8 +43,10 @@ ollama serve
 
 ## Configuration
 
-Configuration is read from `config.toml` in the working directory when present;
-all values have defaults. See `config.example.toml`.
+Configuration is read from `config.toml` in the working directory. The
+repository tracks `config.toml` with working defaults; `config.example.toml` is
+the documented template. Edit `config.toml` directly, or use the environment
+overrides below.
 
 | Key | Default | Meaning |
 |---|---|---|
