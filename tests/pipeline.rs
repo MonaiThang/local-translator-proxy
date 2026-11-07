@@ -1,15 +1,23 @@
 mod common;
 
+use std::time::{Duration, Instant};
+
 use axum::Router;
 use axum::http::StatusCode;
 use local_translator_proxy::build_router;
 
 async fn app(behavior: common::Behavior) -> (Router, common::MockState) {
+    app_with(behavior, 1, 4).await
+}
+
+async fn app_with(
+    behavior: common::Behavior,
+    timeout_secs: u64,
+    max_in_flight: usize,
+) -> (Router, common::MockState) {
     let (endpoint, state) = common::spawn_runtime(behavior).await;
-    (
-        build_router(common::test_config(endpoint)).expect("router builds"),
-        state,
-    )
+    let config = common::test_config_with(endpoint, timeout_secs, max_in_flight);
+    (build_router(config).expect("router builds"), state)
 }
 
 fn encode(text: &str) -> String {
@@ -137,4 +145,34 @@ async fn whitespace_only_unit_makes_no_model_calls() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body, " \t\r\n ");
     assert_eq!(common::request_count(&state), 0);
+}
+
+#[tokio::test]
+async fn concurrency_is_capped_by_max_in_flight() {
+    let (app, state) = app_with(common::Behavior::Delay(Duration::from_millis(100)), 5, 2).await;
+    let original = "a\nb\nc\nd\ne\nf";
+    let (status, _, body) =
+        common::request(&app, "GET", &format!("/?text={}", encode(original))).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, original);
+    assert_eq!(common::request_count(&state), 6);
+    assert_eq!(common::peak_in_flight(&state), 2);
+}
+
+#[tokio::test]
+async fn unit_deadline_bounds_the_whole_translation_unit() {
+    let (app, _) = app_with(common::Behavior::Delay(Duration::from_millis(400)), 1, 1).await;
+    let original = "a\nb\nc\nd";
+    let started = Instant::now();
+    let (status, _, body) =
+        common::request(&app, "GET", &format!("/?text={}", encode(original))).await;
+    let elapsed = started.elapsed();
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, original);
+    assert!(
+        elapsed < Duration::from_millis(1500),
+        "unit should stop at its deadline, took {elapsed:?}"
+    );
 }

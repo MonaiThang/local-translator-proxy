@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -32,12 +33,16 @@ pub enum Behavior {
 #[derive(Clone)]
 pub struct MockState {
     pub requests: Arc<Mutex<Vec<Value>>>,
+    pub current_in_flight: Arc<AtomicUsize>,
+    pub peak_in_flight: Arc<AtomicUsize>,
     behavior: Behavior,
 }
 
 pub async fn spawn_runtime(behavior: Behavior) -> (String, MockState) {
     let state = MockState {
         requests: Arc::new(Mutex::new(Vec::new())),
+        current_in_flight: Arc::new(AtomicUsize::new(0)),
+        peak_in_flight: Arc::new(AtomicUsize::new(0)),
         behavior,
     };
     let app = Router::new()
@@ -54,9 +59,14 @@ pub async fn spawn_runtime(behavior: Behavior) -> (String, MockState) {
 }
 
 pub fn test_config(endpoint: String) -> Config {
+    test_config_with(endpoint, 1, 4)
+}
+
+pub fn test_config_with(endpoint: String, timeout_secs: u64, max_in_flight: usize) -> Config {
     let mut config = Config::default();
     config.model_runtime.endpoint = endpoint;
-    config.model_runtime.timeout_secs = 1;
+    config.model_runtime.timeout_secs = timeout_secs;
+    config.model_runtime.max_in_flight = max_in_flight;
     config
 }
 
@@ -92,7 +102,23 @@ pub fn request_count(state: &MockState) -> usize {
     state.requests.lock().expect("requests lock").len()
 }
 
+pub fn peak_in_flight(state: &MockState) -> usize {
+    state.peak_in_flight.load(Ordering::SeqCst)
+}
+
+struct InFlight<'a>(&'a MockState);
+
+impl Drop for InFlight<'_> {
+    fn drop(&mut self) {
+        self.0.current_in_flight.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 async fn mock_handler(State(state): State<MockState>, Json(body): Json<Value>) -> Response {
+    let current = state.current_in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+    state.peak_in_flight.fetch_max(current, Ordering::SeqCst);
+    let _in_flight = InFlight(&state);
+
     state
         .requests
         .lock()

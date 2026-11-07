@@ -1,10 +1,13 @@
 use std::sync::Arc;
+use std::time::Duration;
 
+use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
+use tokio::time::Instant;
 
 use crate::config::Config;
 use crate::language;
-use crate::lines;
+use crate::lines::{self, Segment};
 use crate::runtime::{RuntimeClient, RuntimeError};
 use crate::tokens::{self, Token, TokenError};
 
@@ -20,11 +23,17 @@ pub struct AppState {
 pub struct Pipeline {
     config: Arc<Config>,
     runtime: Arc<RuntimeClient>,
+    permits: Arc<Semaphore>,
 }
 
 impl Pipeline {
     pub fn new(config: Arc<Config>, runtime: Arc<RuntimeClient>) -> Self {
-        Self { config, runtime }
+        let permits = Arc::new(Semaphore::new(config.model_runtime.max_in_flight));
+        Self {
+            config,
+            runtime,
+            permits,
+        }
     }
 
     /// Translate a Translation Unit, or return it unchanged when translation is
@@ -56,12 +65,49 @@ impl Pipeline {
             return text.to_string();
         }
 
+        let timeout_secs = self.config.model_runtime.timeout_secs;
+        let line_count = units.len();
+        let deadline = Instant::now() + Duration::from_secs(timeout_secs);
+        tracing::debug!(line_count, %from, %to, "translating unit");
+
+        // The deadline covers the whole Translation Unit: permit waits, every
+        // model call, and token verification. A single slow line cannot consume
+        // more than the unit's remaining budget.
+        match tokio::time::timeout_at(deadline, self.run_unit(&segments, units, &from, &to)).await {
+            Ok(Some(output)) => {
+                tracing::debug!(line_count, "translation unit completed");
+                output
+            }
+            Ok(None) => text.to_string(),
+            Err(_) => {
+                tracing::warn!(
+                    timeout_secs,
+                    line_count,
+                    "translation unit timed out; returning the original unit"
+                );
+                text.to_string()
+            }
+        }
+    }
+
+    async fn run_unit(
+        &self,
+        segments: &[Segment<'_>],
+        units: Vec<(usize, String, Vec<Token>)>,
+        from: &str,
+        to: &str,
+    ) -> Option<String> {
         let mut tasks = JoinSet::new();
         for (index, line, source_tokens) in units {
             let runtime = self.runtime.clone();
-            let from = from.clone();
-            let to = to.clone();
+            let permits = self.permits.clone();
+            let from = from.to_string();
+            let to = to.to_string();
             tasks.spawn(async move {
+                let _permit = permits
+                    .acquire_owned()
+                    .await
+                    .map_err(|_| LineFailure::Closed)?;
                 translate_line(runtime.as_ref(), index, line, source_tokens, &from, &to).await
             });
         }
@@ -73,22 +119,29 @@ impl Pipeline {
                 Ok(Err(failure)) => {
                     tracing::warn!(%failure, "line translation failed; returning the original unit");
                     tasks.abort_all();
-                    return text.to_string();
+                    return None;
                 }
                 Err(error) => {
-                    tracing::warn!(%error, "line translation task failed; returning the original unit");
+                    tracing::warn!(
+                        %error,
+                        "line translation task failed; returning the original unit"
+                    );
                     tasks.abort_all();
-                    return text.to_string();
+                    return None;
                 }
             }
         }
 
-        let mut output = String::with_capacity(text.len());
+        let capacity = segments
+            .iter()
+            .map(|segment| segment.text.len() + segment.separator.len())
+            .sum();
+        let mut output = String::with_capacity(capacity);
         for (index, segment) in segments.iter().enumerate() {
             output.push_str(translated[index].as_deref().unwrap_or(segment.text));
             output.push_str(segment.separator);
         }
-        output
+        Some(output)
     }
 }
 
@@ -123,6 +176,7 @@ enum LineFailure {
     MalformedTranslation(TokenError),
     TokenMismatch,
     InjectedLineBreak,
+    Closed,
 }
 
 impl std::fmt::Display for LineFailure {
@@ -134,6 +188,7 @@ impl std::fmt::Display for LineFailure {
             }
             Self::TokenMismatch => write!(formatter, "rendering token mismatch"),
             Self::InjectedLineBreak => write!(formatter, "translation injected a line break"),
+            Self::Closed => write!(formatter, "in-flight limiter is closed"),
         }
     }
 }
