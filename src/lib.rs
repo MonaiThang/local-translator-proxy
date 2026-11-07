@@ -3,6 +3,7 @@ pub mod http;
 pub mod language;
 pub mod lines;
 pub mod pipeline;
+pub mod tokens;
 
 use std::sync::Arc;
 

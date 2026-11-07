@@ -3,6 +3,7 @@ use std::sync::Arc;
 use crate::config::Config;
 use crate::language;
 use crate::lines;
+use crate::tokens;
 
 /// Shared state for the inbound HTTP handler.
 #[derive(Clone)]
@@ -38,6 +39,15 @@ impl Pipeline {
         };
 
         let segments = lines::split_lines(text);
+        for segment in &segments {
+            if lines::is_blank(segment.text) {
+                continue;
+            }
+            if tokens::extract(segment.text).is_err() {
+                return text.to_string();
+            }
+        }
+
         lines::reassemble(&segments)
     }
 }

@@ -152,3 +152,23 @@ fn invalid_language_tag_is_a_200_passthrough() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body, "hello");
 }
+
+#[test]
+fn rendering_tokens_are_returned_unchanged() {
+    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+    let original = "<color=red>Hello</color> <b>world</b> <br/>";
+    let encoded = urlencoding::encode(original);
+    let (status, _, body) = runtime.block_on(get(&format!("/?text={encoded}")));
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, original);
+}
+
+#[test]
+fn malformed_rendering_token_is_a_200_passthrough() {
+    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+    let original = "<color=red";
+    let encoded = urlencoding::encode(original);
+    let (status, _, body) = runtime.block_on(get(&format!("/?text={encoded}")));
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, original);
+}
