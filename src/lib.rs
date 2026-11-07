@@ -1,14 +1,21 @@
 pub mod config;
+pub mod http;
 pub mod language;
+pub mod lines;
+pub mod pipeline;
 
-use axum::{Router, routing::get};
+use std::sync::Arc;
+
+use axum::Router;
 
 use config::Config;
+use pipeline::{AppState, Pipeline};
 
 /// Build the HTTP application.
-///
-/// The inbound contract is implemented in the next ticket; this placeholder
-/// keeps the scaffold runnable until then.
-pub fn build_router(_config: Config) -> anyhow::Result<Router> {
-    Ok(Router::new().route("/", get(|| async { "local-translator-proxy" })))
+pub fn build_router(config: Config) -> anyhow::Result<Router> {
+    let config = Arc::new(config);
+    let pipeline = Arc::new(Pipeline::new(config.clone()));
+    let state = AppState { config, pipeline };
+
+    Ok(Router::new().fallback(http::handle).with_state(state))
 }
