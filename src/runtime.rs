@@ -1,0 +1,246 @@
+use std::time::Duration;
+
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+use crate::config::{ModelRuntimeConfig, PromptConfig};
+
+/// HTTP client for the separately installed Model Runtime.
+///
+/// The wire shape is the Ollama chat-completions surface: a non-streaming
+/// `POST /api/chat` with a system + user message and deterministic options.
+#[derive(Clone)]
+pub struct RuntimeClient {
+    client: reqwest::Client,
+    endpoint: String,
+    model: String,
+    seed: i64,
+    system_message: String,
+}
+
+#[derive(Debug)]
+pub enum RuntimeError {
+    Unreachable,
+    Timeout,
+    HttpStatus(u16),
+    Decode,
+    Schema,
+    EmptyTranslation,
+}
+
+impl std::fmt::Display for RuntimeError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unreachable => write!(formatter, "model runtime unreachable"),
+            Self::Timeout => write!(formatter, "model runtime timed out"),
+            Self::HttpStatus(status) => write!(formatter, "model runtime returned HTTP {status}"),
+            Self::Decode => write!(formatter, "model runtime response was not valid JSON"),
+            Self::Schema => write!(formatter, "model runtime response did not match the schema"),
+            Self::EmptyTranslation => {
+                write!(formatter, "model runtime returned an empty translation")
+            }
+        }
+    }
+}
+
+impl std::error::Error for RuntimeError {}
+
+#[derive(Debug, Serialize)]
+struct ChatRequest<'a> {
+    model: &'a str,
+    messages: [ChatMessage; 2],
+    stream: bool,
+    options: ChatOptions,
+}
+
+#[derive(Debug, Serialize)]
+struct ChatMessage {
+    role: &'static str,
+    content: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ChatOptions {
+    temperature: u8,
+    seed: i64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TranslationOutput {
+    translation: String,
+}
+
+impl RuntimeClient {
+    pub fn new(config: &ModelRuntimeConfig, prompt: &PromptConfig) -> anyhow::Result<Self> {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(config.timeout_secs))
+            .build()?;
+
+        Ok(Self {
+            client,
+            endpoint: config.endpoint.clone(),
+            model: config.model.clone(),
+            seed: config.seed,
+            system_message: prompt.system_message.clone(),
+        })
+    }
+
+    /// Translate one physical line.
+    ///
+    /// The caller owns the Translation Unit deadline; this client additionally
+    /// applies the configured HTTP timeout.
+    pub async fn translate_line(
+        &self,
+        line: &str,
+        from: &str,
+        to: &str,
+    ) -> Result<String, RuntimeError> {
+        let request = ChatRequest {
+            model: &self.model,
+            messages: [
+                ChatMessage {
+                    role: "system",
+                    content: self.system_message(from, to),
+                },
+                ChatMessage {
+                    role: "user",
+                    content: line.to_string(),
+                },
+            ],
+            stream: false,
+            options: ChatOptions {
+                temperature: 0,
+                seed: self.seed,
+            },
+        };
+
+        let response = self
+            .client
+            .post(&self.endpoint)
+            .json(&request)
+            .send()
+            .await
+            .map_err(map_network_error)?;
+
+        let status = response.status();
+        if !status.is_success() {
+            return Err(RuntimeError::HttpStatus(status.as_u16()));
+        }
+
+        let value: Value = response.json().await.map_err(|error| {
+            if error.is_timeout() {
+                RuntimeError::Timeout
+            } else {
+                RuntimeError::Decode
+            }
+        })?;
+
+        parse_response(&value)
+    }
+
+    fn system_message(&self, from: &str, to: &str) -> String {
+        format!(
+            "{}\nSource language: {from}\nTarget language: {to}",
+            self.system_message.trim_end()
+        )
+    }
+}
+
+fn map_network_error(error: reqwest::Error) -> RuntimeError {
+    if error.is_timeout() {
+        RuntimeError::Timeout
+    } else {
+        RuntimeError::Unreachable
+    }
+}
+
+fn parse_response(value: &Value) -> Result<String, RuntimeError> {
+    // Runtime-agnostic shape: the body itself carries the structured field.
+    if let Some(translation) = value.get("translation") {
+        let translation = translation.as_str().ok_or(RuntimeError::Schema)?;
+        return non_empty(translation);
+    }
+
+    // Reference target (Ollama): the structured field is inside the assistant
+    // message content.
+    let content = value
+        .pointer("/message/content")
+        .and_then(Value::as_str)
+        .ok_or(RuntimeError::Schema)?;
+    let output: TranslationOutput =
+        serde_json::from_str(content.trim()).map_err(|_| RuntimeError::Schema)?;
+    non_empty(&output.translation)
+}
+
+fn non_empty(translation: &str) -> Result<String, RuntimeError> {
+    if translation.trim().is_empty() {
+        Err(RuntimeError::EmptyTranslation)
+    } else {
+        Ok(translation.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn parses_top_level_translation() {
+        let value = json!({ "translation": "Hello" });
+        assert_eq!(parse_response(&value).expect("translation"), "Hello");
+    }
+
+    #[test]
+    fn parses_ollama_message_content() {
+        let value = json!({
+            "message": { "role": "assistant", "content": "{\"translation\":\"Hello\"}" }
+        });
+        assert_eq!(parse_response(&value).expect("translation"), "Hello");
+    }
+
+    #[test]
+    fn rejects_extra_fields_in_structured_output() {
+        let value = json!({
+            "message": { "content": "{\"translation\":\"Hello\",\"notes\":\"extra\"}" }
+        });
+        assert!(matches!(parse_response(&value), Err(RuntimeError::Schema)));
+    }
+
+    #[test]
+    fn rejects_empty_translation() {
+        let value = json!({ "translation": "   " });
+        assert!(matches!(
+            parse_response(&value),
+            Err(RuntimeError::EmptyTranslation)
+        ));
+    }
+
+    #[test]
+    fn rejects_missing_fields() {
+        assert!(matches!(
+            parse_response(&json!({ "message": { "role": "assistant" } })),
+            Err(RuntimeError::Schema)
+        ));
+        assert!(matches!(
+            parse_response(&json!({ "message": { "content": "not json" } })),
+            Err(RuntimeError::Schema)
+        ));
+    }
+
+    #[test]
+    fn appends_language_directive_to_system_message() {
+        let client = RuntimeClient {
+            client: reqwest::Client::new(),
+            endpoint: "http://127.0.0.1:1/api/chat".to_string(),
+            model: "test".to_string(),
+            seed: 1,
+            system_message: "Translate.\n".to_string(),
+        };
+        assert_eq!(
+            client.system_message("zh-cn", "en"),
+            "Translate.\nSource language: zh-cn\nTarget language: en"
+        );
+    }
+}
