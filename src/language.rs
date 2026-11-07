@@ -1,3 +1,9 @@
+//! Language tag handling for the fixed v1 allowlist.
+//!
+//! Tags are trimmed and lowercased for comparison. [`resolve_pair`] applies the
+//! configured defaults and returns `None` for unsupported or malformed pairs,
+//! which the pipeline turns into a Passthrough Response.
+
 use crate::config::LanguagesConfig;
 
 /// Normalize a BCP47-like tag for comparison.

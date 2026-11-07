@@ -1,3 +1,6 @@
+//! Process entry point: load and validate configuration, initialise logging,
+//! bind the loopback listener, and serve the router until Ctrl+C.
+
 use std::net::SocketAddr;
 
 use anyhow::Context;

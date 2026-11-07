@@ -1,3 +1,9 @@
+//! Translation Unit line handling.
+//!
+//! [`split_lines`] keeps the exact separator after each line so [`reassemble`]
+//! can rebuild the original text byte-for-byte. The pipeline skips blank lines
+//! and never sends them to the model.
+
 /// One physical line of a Translation Unit.
 ///
 /// `separator` is the exact sequence that followed the line in the original

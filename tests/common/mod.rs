@@ -1,3 +1,6 @@
+//! Shared integration-test harness: a configurable mock Model Runtime, router
+//! helpers, and in-flight/concurrency tracking.
+
 #![allow(dead_code)]
 
 use std::sync::atomic::{AtomicUsize, Ordering};

@@ -1,3 +1,10 @@
+//! Model Runtime HTTP client.
+//!
+//! Sends one physical line per non-streaming Ollama-compatible `/api/chat`
+//! request, appends the language directive to the configured system message,
+//! and parses the structured `translation` field. Transport and schema failures
+//! become [`RuntimeError`] for the pipeline to turn into a passthrough.
+
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -18,13 +25,20 @@ pub struct RuntimeClient {
     system_message: String,
 }
 
+/// Failure modes that make the pipeline return the original unit.
 #[derive(Debug)]
 pub enum RuntimeError {
+    /// Connection refused, DNS failure, or another transport error.
     Unreachable,
+    /// The request exceeded the configured HTTP timeout.
     Timeout,
+    /// The runtime returned a non-2xx status.
     HttpStatus(u16),
+    /// The response body was not valid JSON.
     Decode,
+    /// The JSON did not match the expected `translation` envelope.
     Schema,
+    /// The structured translation was missing or whitespace-only.
     EmptyTranslation,
 }
 
@@ -147,6 +161,7 @@ impl RuntimeClient {
     }
 }
 
+/// Map a `reqwest` transport error onto the pipeline's failure vocabulary.
 fn map_network_error(error: reqwest::Error) -> RuntimeError {
     if error.is_timeout() {
         RuntimeError::Timeout
@@ -155,6 +170,8 @@ fn map_network_error(error: reqwest::Error) -> RuntimeError {
     }
 }
 
+/// Accept either a top-level `translation` field or Ollama's assistant message
+/// content containing the same structured JSON.
 fn parse_response(value: &Value) -> Result<String, RuntimeError> {
     // Runtime-agnostic shape: the body itself carries the structured field.
     if let Some(translation) = value.get("translation") {
@@ -173,6 +190,7 @@ fn parse_response(value: &Value) -> Result<String, RuntimeError> {
     non_empty(&output.translation)
 }
 
+/// Reject an absent or whitespace-only translation.
 fn non_empty(translation: &str) -> Result<String, RuntimeError> {
     if translation.trim().is_empty() {
         Err(RuntimeError::EmptyTranslation)

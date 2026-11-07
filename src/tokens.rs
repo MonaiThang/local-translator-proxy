@@ -1,3 +1,10 @@
+//! Rendering Token extraction and positional verification.
+//!
+//! The scanner recognises the v1 minimal tag set and escaped line breaks. A tag
+//! that starts like a known tag but is malformed is treated as ambiguous, and a
+//! translated token list that differs in content, order, or count from the
+//! source causes a Passthrough Response.
+
 /// A Rendering Token found in a line of game text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Token {
@@ -7,8 +14,10 @@ pub struct Token {
     pub start: usize,
 }
 
+/// A malformed or ambiguous Rendering Token, located by byte offset.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TokenError {
+    /// Byte offset where the ambiguous tag starts.
     pub offset: usize,
 }
 

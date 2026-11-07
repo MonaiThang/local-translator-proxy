@@ -1,3 +1,11 @@
+//! Translation Unit orchestration.
+//!
+//! [`Pipeline::translate`] is the passthrough-first core: it validates the
+//! language pair, splits and token-checks each line, runs model calls
+//! concurrently under a shared in-flight cap, verifies translations, and
+//! reassembles the unit. The whole unit shares one wall-clock deadline, and the
+//! first failure returns the original text untouched.
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -14,11 +22,16 @@ use crate::tokens::{self, Token, TokenError};
 /// Shared state for the inbound HTTP handler.
 #[derive(Clone)]
 pub struct AppState {
+    /// Validated startup configuration.
     pub config: Arc<Config>,
+    /// The shared translation pipeline.
     pub pipeline: Arc<Pipeline>,
 }
 
 /// The end-to-end translation pipeline.
+///
+/// One instance is shared across requests; the semaphore caps concurrent model
+/// calls for the whole process.
 #[derive(Clone)]
 pub struct Pipeline {
     config: Arc<Config>,
@@ -27,6 +40,7 @@ pub struct Pipeline {
 }
 
 impl Pipeline {
+    /// Build a pipeline from validated configuration and a runtime client.
     pub fn new(config: Arc<Config>, runtime: Arc<RuntimeClient>) -> Self {
         let permits = Arc::new(Semaphore::new(config.model_runtime.max_in_flight));
         Self {

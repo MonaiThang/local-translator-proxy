@@ -1,3 +1,10 @@
+//! Runtime configuration.
+//!
+//! [`Config::load`] reads `config.toml` from the working directory (defaults
+//! apply when absent), applies the documented `TRANSLATOR_PROXY_*` environment
+//! overrides, normalizes language tags, and validates every value. Invalid
+//! configuration fails startup instead of serving a half-configured proxy.
+
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use std::net::SocketAddr;
@@ -20,30 +27,43 @@ pub struct Config {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct ServerConfig {
+    /// Loopback address the HTTP server binds to.
     pub listen_addr: String,
 }
 
+/// Settings for the separately installed Model Runtime.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct ModelRuntimeConfig {
+    /// Ollama-compatible non-streaming chat endpoint.
     pub endpoint: String,
+    /// Model name sent with each request.
     pub model: String,
+    /// Wall-clock deadline for one whole Translation Unit, in seconds.
     pub timeout_secs: u64,
+    /// Maximum concurrent Model Runtime calls across the process.
     pub max_in_flight: usize,
+    /// Deterministic sampling seed.
     pub seed: i64,
 }
 
+/// The fixed source-to-target allowlist and its fallbacks.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct LanguagesConfig {
+    /// Allowed `(from, to)` pairs; compared after normalization.
     pub supported_pairs: Vec<(String, String)>,
+    /// Source language used when the request omits or empties `from`.
     pub default_from: String,
+    /// Target language used when the request omits or empties `to`.
     pub default_to: String,
 }
 
+/// The system instruction sent to the model.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct PromptConfig {
+    /// Base instruction; the proxy appends the requested language directive.
     pub system_message: String,
 }
 
@@ -163,6 +183,7 @@ impl Config {
         self.languages.normalize();
     }
 
+    /// Check every field for a usable value.
     pub fn validate(&self) -> Result<()> {
         let addr: SocketAddr =
             self.server.listen_addr.parse().with_context(|| {
@@ -254,6 +275,7 @@ impl LanguagesConfig {
     }
 }
 
+/// Parse a comma-separated `from:to` list used by the env override.
 fn parse_pairs(value: &str) -> Result<Vec<(String, String)>> {
     if value.trim().is_empty() {
         return Ok(Vec::new());

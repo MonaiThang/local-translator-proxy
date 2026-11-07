@@ -1,3 +1,9 @@
+//! Inbound game-facing HTTP contract.
+//!
+//! Every path and verb is accepted. The query string is parsed manually and
+//! leniently so malformed input yields a Passthrough Response instead of a
+//! `400`; responses are always `200` with `text/plain; charset=utf-8`.
+
 use std::collections::HashMap;
 
 use axum::extract::{Request, State};
@@ -53,6 +59,7 @@ fn decode_component(value: &str) -> String {
     String::from_utf8_lossy(&decoded).into_owned()
 }
 
+/// Wrap a body in the fixed, game-safe text response.
 fn plain_text(body: String) -> Response {
     (
         StatusCode::OK,
