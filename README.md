@@ -15,6 +15,22 @@ the MVP `text` / `from` / `to` query parameters.
 - A Model Runtime exposing an Ollama-compatible `POST /api/chat` endpoint
   (the reference target is [Ollama](https://ollama.com))
 
+### Windows
+
+Rust's default Windows target is `x86_64-pc-windows-msvc`, which needs the
+Microsoft linker and Windows SDK. Install
+[Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)
+and select the **Desktop development with C++** workload. Without it,
+`cargo build` fails with an error such as `linker 'link.exe' not found`.
+
+Alternatively, build with the GNU toolchain and MSYS2's MinGW-w64 binutils:
+
+```powershell
+rustup toolchain install stable-x86_64-pc-windows-gnu
+$env:PATH = "C:\msys64\mingw64\bin;" + $env:PATH
+cargo +stable-x86_64-pc-windows-gnu build --release
+```
+
 ## Build and run
 
 ```sh
