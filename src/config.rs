@@ -449,4 +449,15 @@ mod tests {
             Config::default().prompt.system_message
         );
     }
+
+    #[test]
+    fn tracked_config_uses_the_default_prompt() {
+        let tracked =
+            Config::from_toml_str(include_str!("../config.toml")).expect("config.toml parses");
+
+        assert_eq!(
+            tracked.prompt.system_message,
+            Config::default().prompt.system_message
+        );
+    }
 }

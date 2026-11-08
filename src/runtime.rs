@@ -175,9 +175,7 @@ fn map_network_error(error: reqwest::Error) -> RuntimeError {
 fn parse_response(value: &Value) -> Result<String, RuntimeError> {
     // Runtime-agnostic shape: the body itself carries the structured field.
     if value.get("translation").is_some() {
-        let output: TranslationOutput =
-            serde_json::from_value(value.clone()).map_err(|_| RuntimeError::Schema)?;
-        return non_empty(&output.translation);
+        return parse_translation(&value.to_string());
     }
 
     // Reference target (Ollama): the structured field is inside the assistant
@@ -186,36 +184,43 @@ fn parse_response(value: &Value) -> Result<String, RuntimeError> {
         .pointer("/message/content")
         .and_then(Value::as_str)
         .ok_or(RuntimeError::Schema)?;
-    let content = strip_code_fence(content);
+    parse_translation(normalize_assistant_content(content))
+}
+
+/// Deserialize the strict structured payload and reject an empty translation.
+fn parse_translation(content: &str) -> Result<String, RuntimeError> {
     let output: TranslationOutput =
         serde_json::from_str(content).map_err(|_| RuntimeError::Schema)?;
     non_empty(&output.translation)
 }
 
-/// Remove one surrounding Markdown code fence from assistant content.
+/// Normalize assistant content before JSON parsing.
 ///
-/// Small models often wrap the structured payload in ```` ``` ```` or
-/// ```` ```json ```` fences even when told not to. Only a fence that wraps the
-/// whole payload is removed; prose outside the fence is left in place and fails
-/// schema validation.
-fn strip_code_fence(content: &str) -> &str {
+/// Models often wrap the structured payload in a Markdown fence even when told
+/// not to, and they may add surrounding whitespace. One fence (three or more
+/// backticks, optionally tagged `json`) that wraps the whole payload is
+/// removed. Prose outside the fence is left in place and fails schema
+/// validation.
+fn normalize_assistant_content(content: &str) -> &str {
     let trimmed = content.trim();
-    let Some(inner) = trimmed
-        .strip_prefix("```")
-        .and_then(|rest| rest.strip_suffix("```"))
-    else {
+    let opening = trimmed.len() - trimmed.trim_start_matches('`').len();
+    if opening < 3 {
         return trimmed;
-    };
-    let inner = inner.trim_start();
-    let inner = if inner
+    }
+    let after_opening = &trimmed[opening..];
+    let closing = after_opening.len() - after_opening.trim_end_matches('`').len();
+    if closing < opening {
+        return trimmed;
+    }
+    let inner = after_opening[..after_opening.len() - closing].trim();
+    if inner
         .get(..4)
         .is_some_and(|tag| tag.eq_ignore_ascii_case("json"))
     {
-        &inner[4..]
+        inner[4..].trim()
     } else {
         inner
-    };
-    inner.trim()
+    }
 }
 
 /// Reject an absent or whitespace-only translation.
@@ -266,6 +271,22 @@ mod tests {
     fn parses_same_line_fenced_ollama_message_content() {
         let value = json!({
             "message": { "content": "```json {\"translation\":\"Hello\"} ```" }
+        });
+        assert_eq!(parse_response(&value).expect("translation"), "Hello");
+    }
+
+    #[test]
+    fn parses_fence_with_a_spaced_json_tag() {
+        let value = json!({
+            "message": { "content": "``` json\n{\"translation\":\"Hello\"}\n```" }
+        });
+        assert_eq!(parse_response(&value).expect("translation"), "Hello");
+    }
+
+    #[test]
+    fn parses_four_backtick_fence() {
+        let value = json!({
+            "message": { "content": "````json\n{\"translation\":\"Hello\"}\n````" }
         });
         assert_eq!(parse_response(&value).expect("translation"), "Hello");
     }

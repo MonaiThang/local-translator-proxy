@@ -24,6 +24,7 @@ pub enum Behavior {
     Prefix(&'static str),
     Replace(&'static str),
     Fenced(&'static str),
+    ProseWrapped(&'static str),
     Status(u16),
     Delay(Duration),
     InjectNewline,
@@ -139,6 +140,7 @@ async fn mock_handler(State(state): State<MockState>, Json(body): Json<Value>) -
         Behavior::Prefix(prefix) => translated(&format!("{prefix}{line}")),
         Behavior::Replace(replacement) => translated(replacement),
         Behavior::Fenced(text) => fenced_translated(text),
+        Behavior::ProseWrapped(text) => prose_wrapped_fenced(text),
         Behavior::Status(status) => StatusCode::from_u16(*status)
             .expect("valid status")
             .into_response(),
@@ -158,13 +160,20 @@ async fn mock_handler(State(state): State<MockState>, Json(body): Json<Value>) -
     }
 }
 
-fn translated(text: &str) -> Response {
-    let content = json!({ "translation": text }).to_string();
+fn message_response(content: String) -> Response {
     Json(json!({ "message": { "role": "assistant", "content": content } })).into_response()
+}
+
+fn translated(text: &str) -> Response {
+    message_response(json!({ "translation": text }).to_string())
 }
 
 fn fenced_translated(text: &str) -> Response {
     let payload = json!({ "translation": text }).to_string();
-    let content = format!("```json\n{payload}\n```");
-    Json(json!({ "message": { "role": "assistant", "content": content } })).into_response()
+    message_response(format!("```json\n{payload}\n```"))
+}
+
+fn prose_wrapped_fenced(text: &str) -> Response {
+    let payload = json!({ "translation": text }).to_string();
+    message_response(format!("Here is the translation:\n```json\n{payload}\n```"))
 }

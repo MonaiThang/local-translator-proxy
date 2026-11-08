@@ -30,8 +30,9 @@ cargo +stable-x86_64-pc-windows-gnu test
 ## Test layout
 
 - `tests/common/mod.rs` — configurable mock Model Runtime plus router, request,
-  and concurrency helpers. `Behavior` selects echo, prefix, replace, status,
-  delay, newline injection, or conditional failure/replacement.
+  and concurrency helpers. `Behavior` selects echo, prefix, replace, fenced
+  JSON, prose-wrapped schema failure, status, delay, newline injection, or
+  conditional failure/replacement.
 - `tests/http_contract.rs` — inbound parsing and response envelope.
 - `tests/pipeline.rs` — end-to-end translation, token safety, passthrough,
   concurrency cap, and the unit deadline.

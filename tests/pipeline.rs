@@ -36,6 +36,23 @@ async fn translates_a_single_line() {
 }
 
 #[tokio::test]
+async fn sends_the_schema_and_escaping_instructions_to_the_runtime() {
+    let (app, state) = app(common::Behavior::Prefix("EN: ")).await;
+    let _ = common::request(&app, "GET", &format!("/?text={}", encode("你好"))).await;
+
+    let requests = state.requests.lock().expect("requests lock");
+    let system = requests[0]
+        .pointer("/messages/0/content")
+        .and_then(serde_json::Value::as_str)
+        .expect("system message");
+
+    assert!(system.contains(r#"{"translation": "<translated text>"}"#));
+    assert!(system.contains("escape ASCII double quotes and backslashes"));
+    assert!(system.contains("Source language: zh-cn"));
+    assert!(system.contains("Target language: en"));
+}
+
+#[tokio::test]
 async fn fenced_json_from_the_runtime_is_translated() {
     let (app, _) = app(common::Behavior::Fenced("Hello")).await;
     let (status, content_type, body) =
@@ -47,10 +64,22 @@ async fn fenced_json_from_the_runtime_is_translated() {
 }
 
 #[tokio::test]
-async fn escaped_line_break_tokens_survive_the_json_round_trip() {
+async fn prose_wrapped_fenced_response_returns_the_whole_original_unit() {
+    let (app, _) = app(common::Behavior::ProseWrapped("Hello")).await;
+    let original = "你好";
+    let (status, content_type, body) =
+        common::request(&app, "GET", &format!("/?text={}", encode(original))).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(content_type, "text/plain; charset=utf-8");
+    assert_eq!(body, original);
+}
+
+#[tokio::test]
+async fn escaped_line_break_tokens_survive_fenced_json() {
     let original = r"第一行\r\n第二行\n第三行";
     let translated = r"First line\r\nSecond line\nThird line";
-    let (app, _) = app(common::Behavior::Replace(translated)).await;
+    let (app, _) = app(common::Behavior::Fenced(translated)).await;
     let (status, _, body) =
         common::request(&app, "GET", &format!("/?text={}", encode(original))).await;
 
