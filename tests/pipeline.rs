@@ -36,6 +36,29 @@ async fn translates_a_single_line() {
 }
 
 #[tokio::test]
+async fn fenced_json_from_the_runtime_is_translated() {
+    let (app, _) = app(common::Behavior::Fenced("Hello")).await;
+    let (status, content_type, body) =
+        common::request(&app, "GET", &format!("/?text={}", encode("你好"))).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(content_type, "text/plain; charset=utf-8");
+    assert_eq!(body, "Hello");
+}
+
+#[tokio::test]
+async fn escaped_line_break_tokens_survive_the_json_round_trip() {
+    let original = r"第一行\r\n第二行\n第三行";
+    let translated = r"First line\r\nSecond line\nThird line";
+    let (app, _) = app(common::Behavior::Replace(translated)).await;
+    let (status, _, body) =
+        common::request(&app, "GET", &format!("/?text={}", encode(original))).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, translated);
+}
+
+#[tokio::test]
 async fn translates_multiple_lines_and_keeps_every_separator() {
     let (app, _) = app(common::Behavior::Prefix("EN: ")).await;
     let original = "一\r\n二\r三\n四";

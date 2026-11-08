@@ -12,6 +12,10 @@ _Avoid_: translator, translation server
 Separately installed local software that hosts and executes the selected translation model.
 _Avoid_: proxy, translation service
 
+**Translation Backend**:
+An external system that produces translations for the Translation Proxy. A Model Runtime is one kind; a remote service such as Google Translate is another.
+_Avoid_: translator, provider
+
 **Translation Request**:
 A game-originated request containing text and a requested source-to-target language pairing.
 _Avoid_: sentence, message

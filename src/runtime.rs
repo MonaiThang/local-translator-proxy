@@ -174,9 +174,10 @@ fn map_network_error(error: reqwest::Error) -> RuntimeError {
 /// content containing the same structured JSON.
 fn parse_response(value: &Value) -> Result<String, RuntimeError> {
     // Runtime-agnostic shape: the body itself carries the structured field.
-    if let Some(translation) = value.get("translation") {
-        let translation = translation.as_str().ok_or(RuntimeError::Schema)?;
-        return non_empty(translation);
+    if value.get("translation").is_some() {
+        let output: TranslationOutput =
+            serde_json::from_value(value.clone()).map_err(|_| RuntimeError::Schema)?;
+        return non_empty(&output.translation);
     }
 
     // Reference target (Ollama): the structured field is inside the assistant
@@ -185,9 +186,36 @@ fn parse_response(value: &Value) -> Result<String, RuntimeError> {
         .pointer("/message/content")
         .and_then(Value::as_str)
         .ok_or(RuntimeError::Schema)?;
+    let content = strip_code_fence(content);
     let output: TranslationOutput =
-        serde_json::from_str(content.trim()).map_err(|_| RuntimeError::Schema)?;
+        serde_json::from_str(content).map_err(|_| RuntimeError::Schema)?;
     non_empty(&output.translation)
+}
+
+/// Remove one surrounding Markdown code fence from assistant content.
+///
+/// Small models often wrap the structured payload in ```` ``` ```` or
+/// ```` ```json ```` fences even when told not to. Only a fence that wraps the
+/// whole payload is removed; prose outside the fence is left in place and fails
+/// schema validation.
+fn strip_code_fence(content: &str) -> &str {
+    let trimmed = content.trim();
+    let Some(inner) = trimmed
+        .strip_prefix("```")
+        .and_then(|rest| rest.strip_suffix("```"))
+    else {
+        return trimmed;
+    };
+    let inner = inner.trim_start();
+    let inner = if inner
+        .get(..4)
+        .is_some_and(|tag| tag.eq_ignore_ascii_case("json"))
+    {
+        &inner[4..]
+    } else {
+        inner
+    };
+    inner.trim()
 }
 
 /// Reject an absent or whitespace-only translation.
@@ -216,6 +244,46 @@ mod tests {
             "message": { "role": "assistant", "content": "{\"translation\":\"Hello\"}" }
         });
         assert_eq!(parse_response(&value).expect("translation"), "Hello");
+    }
+
+    #[test]
+    fn parses_fenced_ollama_message_content() {
+        let value = json!({
+            "message": { "content": "```json\n{\"translation\":\"Hello\"}\n```" }
+        });
+        assert_eq!(parse_response(&value).expect("translation"), "Hello");
+    }
+
+    #[test]
+    fn parses_bare_fenced_ollama_message_content() {
+        let value = json!({
+            "message": { "content": "```\n{\"translation\":\"Hello\"}\n```" }
+        });
+        assert_eq!(parse_response(&value).expect("translation"), "Hello");
+    }
+
+    #[test]
+    fn parses_same_line_fenced_ollama_message_content() {
+        let value = json!({
+            "message": { "content": "```json {\"translation\":\"Hello\"} ```" }
+        });
+        assert_eq!(parse_response(&value).expect("translation"), "Hello");
+    }
+
+    #[test]
+    fn rejects_prose_wrapped_fenced_message_content() {
+        let value = json!({
+            "message": {
+                "content": "Here is the translation:\n```json\n{\"translation\":\"Hello\"}\n```"
+            }
+        });
+        assert!(matches!(parse_response(&value), Err(RuntimeError::Schema)));
+    }
+
+    #[test]
+    fn rejects_extra_fields_in_top_level_translation() {
+        let value = json!({ "translation": "Hello", "notes": "extra" });
+        assert!(matches!(parse_response(&value), Err(RuntimeError::Schema)));
     }
 
     #[test]

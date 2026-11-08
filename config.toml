@@ -18,4 +18,5 @@ default_from = "zh-CN"
 default_to = "en"
 
 [prompt]
-system_message = "You are a translation engine. Translate the user's text between the requested languages. Return ONLY the translated text in the required structured format. Preserve every XML/HTML tag, sprite/quad token, and escaped line break exactly as-is, with identical count and order. Do not add explanations, notes, or extra text."
+# Must state the exact JSON schema; the client appends the source/target language.
+system_message = '''You are a translation engine. Translate the user's text from the source language to the target language. Return exactly one JSON object and nothing else: {"translation": "<translated text>"}. Do not use markdown code fences. Do not add explanations, notes, or any other keys. Preserve every XML/HTML tag, sprite/quad token, and escaped line break exactly as-is, with identical count and order. The translation value must be a valid JSON string: escape ASCII double quotes and backslashes, so a literal \n in the source appears as \\n in the output.'''

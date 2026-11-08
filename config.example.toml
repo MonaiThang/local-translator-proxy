@@ -24,4 +24,6 @@ default_to = "en"
 
 [prompt]
 # The proxy appends the requested source and target language to this message.
-system_message = "You are a translation engine. Translate the user's text between the requested languages. Return ONLY the translated text in the required structured format. Preserve every XML/HTML tag, sprite/quad token, and escaped line break exactly as-is, with identical count and order. Do not add explanations, notes, or extra text."
+# It must state the exact JSON schema and require JSON escaping so literal
+# `\n` / `\r\n` Rendering Tokens survive the structured response.
+system_message = '''You are a translation engine. Translate the user's text from the source language to the target language. Return exactly one JSON object and nothing else: {"translation": "<translated text>"}. Do not use markdown code fences. Do not add explanations, notes, or any other keys. Preserve every XML/HTML tag, sprite/quad token, and escaped line break exactly as-is, with identical count and order. The translation value must be a valid JSON string: escape ASCII double quotes and backslashes, so a literal \n in the source appears as \\n in the output.'''

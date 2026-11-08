@@ -67,6 +67,13 @@ pub struct PromptConfig {
     pub system_message: String,
 }
 
+/// Default system instruction sent to the model.
+///
+/// It states the exact JSON schema because the client rejects any other shape.
+/// The escaping sentence keeps literal `\n` / `\r\n` Rendering Tokens intact
+/// when the model embeds them in a JSON string.
+const DEFAULT_SYSTEM_MESSAGE: &str = "You are a translation engine. Translate the user's text from the source language to the target language. Return exactly one JSON object and nothing else: {\"translation\": \"<translated text>\"}. Do not use markdown code fences. Do not add explanations, notes, or any other keys. Preserve every XML/HTML tag, sprite/quad token, and escaped line break exactly as-is, with identical count and order. The translation value must be a valid JSON string: escape ASCII double quotes and backslashes, so a literal \\n in the source appears as \\\\n in the output.";
+
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
@@ -100,7 +107,7 @@ impl Default for LanguagesConfig {
 impl Default for PromptConfig {
     fn default() -> Self {
         Self {
-            system_message: "You are a translation engine. Translate the user's text between the requested languages. Return ONLY the translated text in the required structured format. Preserve every XML/HTML tag, sprite/quad token, and escaped line break exactly as-is, with identical count and order. Do not add explanations, notes, or extra text.".to_string(),
+            system_message: DEFAULT_SYSTEM_MESSAGE.to_string(),
         }
     }
 }
@@ -419,6 +426,27 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("TRANSLATOR_PROXY_LANGUAGES_SUPPORTED_PAIRS")
+        );
+    }
+
+    #[test]
+    fn default_prompt_states_the_schema_and_escaping() {
+        let prompt = Config::default().prompt.system_message;
+
+        assert!(prompt.contains(r#"{"translation": "<translated text>"}"#));
+        assert!(prompt.contains("Preserve every XML/HTML tag"));
+        assert!(prompt.contains("escape ASCII double quotes and backslashes"));
+        assert!(prompt.contains(r"a literal \n in the source appears as \\n in the output"));
+    }
+
+    #[test]
+    fn example_config_uses_the_default_prompt() {
+        let example = Config::from_toml_str(include_str!("../config.example.toml"))
+            .expect("config.example.toml parses");
+
+        assert_eq!(
+            example.prompt.system_message,
+            Config::default().prompt.system_message
         );
     }
 }
