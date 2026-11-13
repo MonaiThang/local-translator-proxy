@@ -43,11 +43,37 @@ extra setup. Edit it directly for local changes; `config.example.toml` is the
 fully documented template.
 
 The proxy starts on `127.0.0.1:5000` unless `config.toml` or an environment
-override says otherwise. Logging is controlled by `RUST_LOG` (default `info`):
+override says otherwise. Logging is controlled by `RUST_LOG` (default `info`).
+
+At the default `info` level, the console prints one line per verified physical
+line, including the source text and its translation:
+
+```text
+INFO local_translator_proxy::pipeline: line=0 from=zh-cn to=en source="õ¢áÕÑ¢" translated="Hello"
+```
+
+Rejected model output is logged at `warn` and labelled `rejected`; it is never
+returned to the game. Failures and timeouts log the original Translation Unit at
+`warn`. Expected passthroughs (an unsupported language pair or ambiguous
+Rendering Tokens) are logged at `debug`.
+
+To see those debug diagnostics:
 
 ```powershell
 $env:RUST_LOG = "debug"
 cargo run
+```
+
+To hide translation pairs while preserving warnings:
+
+```powershell
+$env:RUST_LOG = "info,local_translator_proxy::pipeline=warn"
+```
+
+To also hide rejected warnings:
+
+```powershell
+$env:RUST_LOG = "info,local_translator_proxy::pipeline=error"
 ```
 
 For the reference Model Runtime:

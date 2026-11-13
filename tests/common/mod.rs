@@ -3,6 +3,8 @@
 
 #![allow(dead_code)]
 
+use std::future::Future;
+use std::io::Write;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -17,6 +19,7 @@ use local_translator_proxy::config::Config;
 use serde_json::{Value, json};
 use tokio::net::TcpListener;
 use tower::ServiceExt;
+use tracing_subscriber::fmt::MakeWriter;
 
 #[derive(Clone)]
 pub enum Behavior {
@@ -101,6 +104,56 @@ pub async fn request(app: &Router, method: &str, uri: &str) -> (StatusCode, Stri
     let body = String::from_utf8(body.to_vec()).expect("utf-8 body");
 
     (status, content_type, body)
+}
+
+/// Capture tracing output emitted while `future` runs on this thread.
+///
+/// The subscriber is thread-local, so it does not interfere with other tests.
+/// Use a current-thread Tokio test; spawned tasks are then polled on the same
+/// thread and inherit the subscriber.
+pub async fn capture_logs<F, Fut, T>(filter: &str, future: F) -> (T, String)
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = T>,
+{
+    let buffer = LogBuffer::default();
+    let subscriber = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .with_writer(buffer.clone())
+        .with_env_filter(tracing_subscriber::EnvFilter::new(filter))
+        .finish();
+    let guard = tracing::subscriber::set_default(subscriber);
+    let output = future().await;
+    drop(guard);
+    (output, buffer.contents())
+}
+
+#[derive(Clone, Default)]
+struct LogBuffer(Arc<Mutex<Vec<u8>>>);
+
+impl LogBuffer {
+    fn contents(&self) -> String {
+        String::from_utf8(self.0.lock().expect("log buffer").clone()).expect("utf-8 logs")
+    }
+}
+
+impl Write for LogBuffer {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().expect("log buffer").extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'a> MakeWriter<'a> for LogBuffer {
+    type Writer = LogBuffer;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        self.clone()
+    }
 }
 
 pub fn request_count(state: &MockState) -> usize {

@@ -65,8 +65,9 @@ unit tests beside their module.
    The bytes for `你好` are `e4 bd a0 e5 a5 bd`. Console rendering may show
    `??`; inspect the bytes, not the console.
 
-For real translation, point the endpoint at Ollama and use `$env:RUST_LOG =
-"debug"` to see per-unit timing and failure reasons.
+For real translation, point the endpoint at Ollama. Source text and its verified
+translation print at the default `info` level; use `$env:RUST_LOG = "debug"` to
+add per-unit timing and expected-passthrough diagnostics.
 
 ## Conventions
 

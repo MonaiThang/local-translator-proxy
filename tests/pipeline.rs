@@ -228,3 +228,217 @@ async fn unit_deadline_bounds_the_whole_translation_unit() {
         "unit should stop at its deadline, took {elapsed:?}"
     );
 }
+
+#[tokio::test]
+async fn logs_verified_lines_at_info_in_source_order() {
+    let (app, _) = app(common::Behavior::Prefix("EN: ")).await;
+    let original = "一\r\n\r\n二\n三";
+    let ((status, _, body), logs) = common::capture_logs("local_translator_proxy=info", || async {
+        common::request(&app, "GET", &format!("/?text={}", encode(original))).await
+    })
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, "EN: 一\r\n\r\nEN: 二\nEN: 三");
+
+    let info: Vec<&str> = logs
+        .lines()
+        .filter(|line| line.contains(" INFO "))
+        .collect();
+    assert_eq!(info.len(), 3, "logs: {logs}");
+    assert!(info[0].contains("line=0"), "logs: {logs}");
+    assert!(info[0].contains("from=zh-cn"), "logs: {logs}");
+    assert!(info[0].contains("to=en"), "logs: {logs}");
+    assert!(info[0].contains(r#"source="一""#), "logs: {logs}");
+    assert!(info[0].contains(r#"translated="EN: 一""#), "logs: {logs}");
+    assert!(info[1].contains("line=2"), "logs: {logs}");
+    assert!(info[1].contains(r#"source="二""#), "logs: {logs}");
+    assert!(info[1].contains(r#"translated="EN: 二""#), "logs: {logs}");
+    assert!(info[2].contains("line=3"), "logs: {logs}");
+    assert!(info[2].contains(r#"source="三""#), "logs: {logs}");
+    assert!(info[2].contains(r#"translated="EN: 三""#), "logs: {logs}");
+}
+
+#[tokio::test]
+async fn logs_rejected_translation_at_warn_and_the_original_unit() {
+    let (app, _) = app(common::Behavior::ReplaceWhenContaining {
+        needle: "<color=red>",
+        replacement: "<color=blue>",
+    })
+    .await;
+    let original = "ok\n<color=red>Hello</color>";
+    let ((status, _, body), logs) = common::capture_logs("local_translator_proxy=info", || async {
+        common::request(&app, "GET", &format!("/?text={}", encode(original))).await
+    })
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, original);
+    assert!(logs.contains("translation rejected"), "logs: {logs}");
+    assert!(logs.contains("line=1"), "logs: {logs}");
+    assert!(
+        logs.contains(r#"source="<color=red>Hello</color>""#),
+        "logs: {logs}"
+    );
+    assert!(
+        logs.contains(r#"rejected="<color=blue>Hello</color>""#),
+        "logs: {logs}"
+    );
+    assert!(logs.contains("rendering token mismatch"), "logs: {logs}");
+    assert!(logs.contains("line translation failed"), "logs: {logs}");
+    assert!(
+        logs.contains(r#"text="ok\n<color=red>Hello</color>""#),
+        "logs: {logs}"
+    );
+    assert!(!logs.contains("line=0"), "logs: {logs}");
+}
+
+#[tokio::test]
+async fn logs_malformed_translated_tokens_as_rejected() {
+    let (app, _) = app(common::Behavior::ReplaceWhenContaining {
+        needle: "<b>",
+        replacement: r#"<b class="x">"#,
+    })
+    .await;
+    let original = "<b>Hello</b>";
+    let ((status, _, body), logs) = common::capture_logs("local_translator_proxy=info", || async {
+        common::request(&app, "GET", &format!("/?text={}", encode(original))).await
+    })
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, original);
+    assert!(logs.contains("translation rejected"), "logs: {logs}");
+    assert!(logs.contains("malformed rendering token"), "logs: {logs}");
+    assert!(
+        logs.contains(r#"rejected="<b class=\"x\">Hello</b>""#),
+        "logs: {logs}"
+    );
+    assert!(logs.contains("line translation failed"), "logs: {logs}");
+}
+
+#[tokio::test]
+async fn logs_injected_line_breaks_escaped_on_one_physical_line() {
+    let (app, _) = app(common::Behavior::InjectNewline).await;
+    let original = "hello";
+    let ((status, _, body), logs) = common::capture_logs("local_translator_proxy=info", || async {
+        common::request(&app, "GET", &format!("/?text={}", encode(original))).await
+    })
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, original);
+    assert!(logs.contains("translation rejected"), "logs: {logs}");
+    assert!(logs.contains(r#"rejected="hello\n""#), "logs: {logs}");
+    assert!(logs.contains("line translation failed"), "logs: {logs}");
+
+    let rejected: Vec<&str> = logs
+        .lines()
+        .filter(|line| line.contains("rejected="))
+        .collect();
+    assert_eq!(rejected.len(), 1, "logs: {logs}");
+    assert!(
+        rejected[0].contains(r#"rejected="hello\n""#),
+        "logs: {logs}"
+    );
+}
+
+#[tokio::test]
+async fn logs_runtime_failure_as_a_unit_warn_without_rejected_text() {
+    let (app, _) = app(common::Behavior::FailWhenContaining("bad")).await;
+    let original = "good\nbad";
+    let ((status, _, body), logs) = common::capture_logs("local_translator_proxy=info", || async {
+        common::request(&app, "GET", &format!("/?text={}", encode(original))).await
+    })
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, original);
+    assert!(logs.contains("line translation failed"), "logs: {logs}");
+    assert!(logs.contains("HTTP 500"), "logs: {logs}");
+    assert!(logs.contains(r#"text="good\nbad""#), "logs: {logs}");
+    assert!(!logs.contains("rejected="), "logs: {logs}");
+    assert!(!logs.contains("source="), "logs: {logs}");
+}
+
+#[tokio::test]
+async fn logs_unsupported_pair_at_debug_with_the_original_unit() {
+    let (app, state) = app(common::Behavior::Prefix("EN: ")).await;
+    let ((status, _, body), logs) =
+        common::capture_logs("local_translator_proxy=debug", || async {
+            common::request(
+                &app,
+                "GET",
+                &format!("/?text={}&from=en&to=zh-CN", encode("hello")),
+            )
+            .await
+        })
+        .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, "hello");
+    assert_eq!(common::request_count(&state), 0);
+    assert!(logs.contains("unsupported language pair"), "logs: {logs}");
+    assert!(
+        logs.contains(r#"requested_from=Some("en")"#),
+        "logs: {logs}"
+    );
+    assert!(
+        logs.contains(r#"requested_to=Some("zh-CN")"#),
+        "logs: {logs}"
+    );
+    assert!(logs.contains(r#"text="hello""#), "logs: {logs}");
+}
+
+#[tokio::test]
+async fn logs_ambiguous_source_tokens_at_debug_with_the_original_unit() {
+    let (app, state) = app(common::Behavior::Prefix("EN: ")).await;
+    let original = "ok\n<color=red";
+    let ((status, _, body), logs) =
+        common::capture_logs("local_translator_proxy=debug", || async {
+            common::request(&app, "GET", &format!("/?text={}", encode(original))).await
+        })
+        .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, original);
+    assert_eq!(common::request_count(&state), 0);
+    assert!(logs.contains("ambiguous rendering tokens"), "logs: {logs}");
+    assert!(logs.contains("line=1"), "logs: {logs}");
+    assert!(logs.contains(r#"text="ok\n<color=red""#), "logs: {logs}");
+}
+
+#[tokio::test]
+async fn logs_timeout_at_warn_with_the_original_unit() {
+    let (app, _) = app_with(common::Behavior::Delay(Duration::from_millis(600)), 1, 1).await;
+    let original = "a\nb";
+    let ((status, _, body), logs) = common::capture_logs("local_translator_proxy=info", || async {
+        common::request(&app, "GET", &format!("/?text={}", encode(original))).await
+    })
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, original);
+    assert!(logs.contains("timed out"), "logs: {logs}");
+    assert!(logs.contains("timeout_secs=1"), "logs: {logs}");
+    assert!(logs.contains("line_count=2"), "logs: {logs}");
+    assert!(logs.contains(r#"text="a\nb""#), "logs: {logs}");
+    assert!(!logs.contains("line translated"), "logs: {logs}");
+}
+
+#[tokio::test]
+async fn blank_and_placeholder_units_emit_no_logs() {
+    let (app, _) = app(common::Behavior::Prefix("EN: ")).await;
+
+    for text in [" \t\r\n ", "{text}"] {
+        let ((status, _, body), logs) =
+            common::capture_logs("local_translator_proxy=debug", || async {
+                common::request(&app, "GET", &format!("/?text={}", encode(text))).await
+            })
+            .await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body, text);
+        assert!(logs.is_empty(), "logs for {text:?}: {logs}");
+    }
+}

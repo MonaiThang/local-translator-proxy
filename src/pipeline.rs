@@ -59,6 +59,12 @@ impl Pipeline {
         }
 
         let Some((from, to)) = language::resolve_pair(&self.config.languages, from, to) else {
+            tracing::debug!(
+                requested_from = ?from,
+                requested_to = ?to,
+                text = ?text,
+                "unsupported language pair; returning the original unit"
+            );
             return text.to_string();
         };
 
@@ -70,7 +76,14 @@ impl Pipeline {
             }
             let source_tokens = match tokens::extract(segment.text) {
                 Ok(tokens) => tokens,
-                Err(_) => return text.to_string(),
+                Err(_) => {
+                    tracing::debug!(
+                        line = index,
+                        text = ?text,
+                        "ambiguous rendering tokens; returning the original unit"
+                    );
+                    return text.to_string();
+                }
             };
             units.push((index, segment.text.to_string(), source_tokens));
         }
@@ -97,6 +110,7 @@ impl Pipeline {
                 tracing::warn!(
                     timeout_secs,
                     line_count,
+                    text = ?text,
                     "translation unit timed out; returning the original unit"
                 );
                 text.to_string()
@@ -131,13 +145,20 @@ impl Pipeline {
             match joined {
                 Ok(Ok((index, line))) => translated[index] = Some(line),
                 Ok(Err(failure)) => {
-                    tracing::warn!(%failure, "line translation failed; returning the original unit");
+                    let original = lines::reassemble(segments);
+                    tracing::warn!(
+                        %failure,
+                        text = ?original,
+                        "line translation failed; returning the original unit"
+                    );
                     tasks.abort_all();
                     return None;
                 }
                 Err(error) => {
+                    let original = lines::reassemble(segments);
                     tracing::warn!(
                         %error,
+                        text = ?original,
                         "line translation task failed; returning the original unit"
                     );
                     tasks.abort_all();
@@ -155,6 +176,20 @@ impl Pipeline {
             output.push_str(translated[index].as_deref().unwrap_or(segment.text));
             output.push_str(segment.separator);
         }
+
+        for (index, segment) in segments.iter().enumerate() {
+            if let Some(translated_line) = translated[index].as_deref() {
+                tracing::info!(
+                    line = index,
+                    from = %from,
+                    to = %to,
+                    source = ?segment.text,
+                    translated = ?translated_line,
+                    "line translated"
+                );
+            }
+        }
+
         Some(output)
     }
 }
@@ -172,16 +207,50 @@ async fn translate_line(
         .await
         .map_err(LineFailure::Runtime)?;
 
-    let translated_tokens =
-        tokens::extract(&translated).map_err(LineFailure::MalformedTranslation)?;
+    let translated_tokens = match tokens::extract(&translated) {
+        Ok(tokens) => tokens,
+        Err(error) => {
+            let reason = error.to_string();
+            log_rejected(index, &line, &translated, from, to, &reason);
+            return Err(LineFailure::MalformedTranslation(error));
+        }
+    };
     if !tokens::matches(&source_tokens, &translated_tokens) {
+        log_rejected(
+            index,
+            &line,
+            &translated,
+            from,
+            to,
+            "rendering token mismatch",
+        );
         return Err(LineFailure::TokenMismatch);
     }
     if translated.contains(['\r', '\n']) {
+        log_rejected(
+            index,
+            &line,
+            &translated,
+            from,
+            to,
+            "translation injected a line break",
+        );
         return Err(LineFailure::InjectedLineBreak);
     }
 
     Ok((index, translated))
+}
+
+fn log_rejected(index: usize, source: &str, rejected: &str, from: &str, to: &str, reason: &str) {
+    tracing::warn!(
+        line = index,
+        from = %from,
+        to = %to,
+        source = ?source,
+        rejected = ?rejected,
+        reason = %reason,
+        "translation rejected; returning the original unit"
+    );
 }
 
 #[derive(Debug)]
