@@ -9,6 +9,87 @@ of failing the game request.
 The game call site is unchanged: the proxy listens on `127.0.0.1:5000` and keeps
 the MVP `text` / `from` / `to` query parameters.
 
+## Architecture
+
+The proxy is a local service between an unchanged game and a separately
+installed Model Runtime. The game still calls one loopback URL; the proxy
+handles line splitting, concurrency, verification, and safe failure.
+
+```mermaid
+flowchart LR
+    subgraph Local["Local machine (loopback only)"]
+        Config["config.toml<br/>TRANSLATOR_PROXY_* overrides"]
+        Game["Game process<br/>XUnity.AutoTranslator + BepInEx"]
+        Proxy["Translation Proxy<br/>Rust on 127.0.0.1:5000"]
+        Runtime["Model Runtime<br/>Ollama on 127.0.0.1:11434"]
+
+        Config -->|"allowlist, endpoint, limits"| Proxy
+        Game -->|"GET with text, from, to"| Proxy
+        Proxy -->|"POST /api/chat"| Runtime
+        Runtime -->|"JSON translation"| Proxy
+        Proxy -->|"200 OK, plain UTF-8 text<br/>translated unit or original"| Game
+    end
+```
+
+The game's request is unchanged:
+`GET http://127.0.0.1:5000/?text=...&from=zh-CN&to=en`. The proxy binds loopback
+only (ADR-0002) and returns `200 OK` with `text/plain; charset=utf-8` for both
+translations and Passthrough Responses.
+
+One Translation Request, end to end:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Game as Game (XUnity.AutoTranslator)
+    participant Proxy as Translation Proxy
+    participant Runtime as Model Runtime (Ollama)
+
+    Game->>Proxy: GET with text, from, to
+    Note over Proxy: Lenient query parse<br/>never returns 400
+    Note over Proxy: Placeholder or whitespace-only unit<br/>returned unchanged
+    Proxy->>Proxy: Resolve pair against language allowlist
+
+    alt Unsupported pair
+        Proxy-->>Game: 200 OK, original Translation Unit
+    else Supported pair
+        Proxy->>Proxy: Split lines, preserving CRLF, CR, or LF
+        Proxy->>Proxy: Extract Rendering Tokens
+
+        alt Ambiguous tokens
+            Proxy-->>Game: 200 OK, original Translation Unit
+        else Tokens extracted
+            loop Each non-blank line (max_in_flight = 4)
+                Proxy->>Runtime: POST /api/chat
+                Runtime-->>Proxy: JSON with translation
+            end
+
+            Note over Proxy: Verify tokens positionally<br/>Reject injected CR or LF<br/>Whole-unit deadline (5s)
+
+            alt Any failure, mismatch, or timeout
+                Proxy-->>Game: 200 OK, original Translation Unit
+            else All lines verified
+                Proxy->>Proxy: Reassemble with original separators
+                Proxy-->>Game: 200 OK, plain UTF-8 text
+            end
+        end
+    end
+```
+
+**What "live" means here**
+
+- Translation is request/response per Translation Unit; nothing is streamed.
+- `timeout_secs` (default `5`) bounds the whole unit: allowlist check, permit
+  waits, every model call, and verification.
+- Non-blank lines are translated concurrently, capped by `max_in_flight`
+  (default `4`).
+- Model calls are stateless: no retries and no caching.
+- Any unsafe step returns a Passthrough Response, so the game never stalls.
+
+Internally the flow is `http` → `pipeline` (`language`, `lines`, `tokens`) →
+`runtime`. See [`docs/agents/architecture.md`](docs/agents/architecture.md) for
+the module map and invariants.
+
 ## Requirements
 
 - Rust 1.85+ (the crate uses edition 2024)
@@ -49,7 +130,7 @@ At the default `info` level, the console prints one line per verified physical
 line, including the source text and its translation:
 
 ```text
-INFO local_translator_proxy::pipeline: line=0 from=zh-cn to=en source="õ¢áÕÑ¢" translated="Hello"
+INFO local_translator_proxy::pipeline: line=0 from=zh-cn to=en source="你好" translated="Hello"
 ```
 
 Rejected model output is logged at `warn` and labelled `rejected`; it is never

@@ -3,6 +3,9 @@
 Read this before changing `src/` or the integration tests. Domain vocabulary is
 defined in `GLOSSARY.md`; binding decisions live in `docs/adr/`.
 
+For the game-facing walkthrough, see
+[`README.md` → Architecture](../../README.md#architecture).
+
 ## One request, one unit
 
 The game sends one `GET` carrying a Translation Unit in `text`. The proxy
