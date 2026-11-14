@@ -31,6 +31,7 @@ pub enum Behavior {
     Status(u16),
     Delay(Duration),
     InjectNewline,
+    DoubleEscapedBrackets,
     FailWhenContaining(&'static str),
     ReplaceWhenContaining {
         needle: &'static str,
@@ -202,6 +203,9 @@ async fn mock_handler(State(state): State<MockState>, Json(body): Json<Value>) -
             translated(line)
         }
         Behavior::InjectNewline => translated(&format!("{line}\n")),
+        Behavior::DoubleEscapedBrackets => {
+            translated(&line.replace('[', r"\u005b").replace(']', r"\u005d"))
+        }
         Behavior::FailWhenContaining(needle) if line.contains(needle) => {
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }

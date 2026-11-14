@@ -69,10 +69,11 @@ pub struct PromptConfig {
 
 /// Default system instruction sent to the model.
 ///
-/// It states the exact JSON schema because the client rejects any other shape.
-/// The escaping sentence keeps literal `\n` / `\r\n` Rendering Tokens intact
-/// when the model embeds them in a JSON string.
-const DEFAULT_SYSTEM_MESSAGE: &str = "You are a translation engine. Translate the user's text from the source language to the target language. Return exactly one JSON object and nothing else: {\"translation\": \"<translated text>\"}. Do not use markdown code fences. Do not add explanations, notes, or any other keys. Preserve every XML/HTML tag, sprite/quad token, and escaped line break exactly as-is, with identical count and order. The translation value must be a valid JSON string: escape ASCII double quotes and backslashes, so a literal \\n in the source appears as \\\\n in the output.";
+/// It states the exact JSON schema because the client rejects any other shape,
+/// and restates it at the end because the token and escaping rules can pull
+/// small models back into prose. The escaping sentence keeps literal `\n` /
+/// `\r\n` Rendering Tokens intact when the model embeds them in a JSON string.
+const DEFAULT_SYSTEM_MESSAGE: &str = "You are a translation engine. Translate the user's text from the source language to the target language. Return exactly one JSON object and nothing else: {\"translation\": \"<translated text>\"}. Do not use markdown code fences. Do not add explanations, notes, or any other keys. Preserve every XML/HTML tag, square-bracket colour tag (such as [FF7700] and [-]), sprite/quad token, and escaped line break exactly as-is, with identical count and order. Do not use \\uXXXX escapes; write brackets and non-ASCII characters literally. The translation value must be a valid JSON string: escape double quotes and backslashes as JSON requires, so a literal \\n in the source appears as \\\\n in the output. Always answer with the JSON object only. Treat each square-bracket tag as an opaque token: copy every tag into the translation in the same order and count. Never drop a tag, including a closing tag such as [-].\n\nExamples:\nSource: [FF7700]保存[-]设置后重新启动\nOutput: {\"translation\": \"[FF7700]Save[-] the settings and restart\"}\n\nSource: 装备<b>稀有</b>物品可提升[FF7700]攻击力[-]\nOutput: {\"translation\": \"Equipping a <b>rare</b> item increases [FF7700]attack[-]\"}";
 
 impl Default for ServerConfig {
     fn default() -> Self {
@@ -430,13 +431,30 @@ mod tests {
     }
 
     #[test]
-    fn default_prompt_states_the_schema_and_escaping() {
+    fn default_prompt_states_the_schema_and_rendering_rules() {
         let prompt = Config::default().prompt.system_message;
 
         assert!(prompt.contains(r#"{"translation": "<translated text>"}"#));
         assert!(prompt.contains("Preserve every XML/HTML tag"));
-        assert!(prompt.contains("escape ASCII double quotes and backslashes"));
+        assert!(prompt.contains("square-bracket colour tag"));
+        assert!(prompt.contains("[FF7700]"));
+        assert!(prompt.contains("[-]"));
+        assert!(prompt.contains(r"Do not use \uXXXX escapes"));
+        assert!(prompt.contains("escape double quotes and backslashes as JSON requires"));
         assert!(prompt.contains(r"a literal \n in the source appears as \\n in the output"));
+        assert!(prompt.contains("Always answer with the JSON object only"));
+        assert!(prompt.contains("Treat each square-bracket tag as an opaque token"));
+        assert!(prompt.contains("Never drop a tag"));
+        assert!(prompt.contains("Examples:"));
+        assert!(prompt.contains("Source: [FF7700]保存[-]设置后重新启动"));
+        assert!(
+            prompt
+                .contains(r#"Output: {"translation": "[FF7700]Save[-] the settings and restart"}"#)
+        );
+    }
+
+    fn normalized(message: &str) -> String {
+        message.replace("\r\n", "\n")
     }
 
     #[test]
@@ -445,8 +463,8 @@ mod tests {
             .expect("config.example.toml parses");
 
         assert_eq!(
-            example.prompt.system_message,
-            Config::default().prompt.system_message
+            normalized(&example.prompt.system_message),
+            normalized(&Config::default().prompt.system_message)
         );
     }
 
@@ -456,8 +474,8 @@ mod tests {
             Config::from_toml_str(include_str!("../config.toml")).expect("config.toml parses");
 
         assert_eq!(
-            tracked.prompt.system_message,
-            Config::default().prompt.system_message
+            normalized(&tracked.prompt.system_message),
+            normalized(&Config::default().prompt.system_message)
         );
     }
 }

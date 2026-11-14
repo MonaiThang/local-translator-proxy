@@ -1,9 +1,10 @@
 //! Rendering Token extraction and positional verification.
 //!
-//! The scanner recognises the v1 minimal tag set and escaped line breaks. A tag
-//! that starts like a known tag but is malformed is treated as ambiguous, and a
-//! translated token list that differs in content, order, or count from the
-//! source causes a Passthrough Response.
+//! The scanner recognises the v1 minimal tag set, NGUI-style square-bracket
+//! colour tags, and escaped line breaks. A tag that starts like a known tag but
+//! is malformed is treated as ambiguous, and a translated token list that
+//! differs in content, order, or count from the source causes a Passthrough
+//! Response.
 
 /// A Rendering Token found in a line of game text.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,9 +36,10 @@ impl std::error::Error for TokenError {}
 
 /// Extract the v1 minimal Rendering Token set in source order.
 ///
-/// Unknown angle-bracket sequences are treated as ordinary text. A sequence
-/// that starts like one of the supported tags but is malformed is ambiguous and
-/// returns an error, which the pipeline turns into a Passthrough Response.
+/// Unknown angle-bracket and square-bracket sequences are treated as ordinary
+/// text. A sequence that starts like one of the supported tags but is malformed
+/// is ambiguous and returns an error, which the pipeline turns into a
+/// Passthrough Response.
 pub fn extract(text: &str) -> Result<Vec<Token>, TokenError> {
     let bytes = text.as_bytes();
     let mut tokens = Vec::new();
@@ -54,6 +56,18 @@ pub fn extract(text: &str) -> Result<Vec<Token>, TokenError> {
                 continue;
             }
             if looks_like_known_tag(&text[index..]) {
+                return Err(TokenError { offset: index });
+            }
+        } else if bytes[index] == b'[' {
+            if let Some((end, token)) = parse_bracket_tag(text, index) {
+                tokens.push(Token {
+                    text: token,
+                    start: index,
+                });
+                index = end;
+                continue;
+            }
+            if looks_like_known_bracket_tag(&text[index..]) {
                 return Err(TokenError { offset: index });
             }
         } else if bytes[index] == b'\\'
@@ -158,6 +172,50 @@ fn parse_tag(text: &str, start: usize) -> Option<(usize, String)> {
     }
 
     None
+}
+
+/// NGUI-style colour tags: `[RRGGBB]` with exactly six hex digits, and `[-]`.
+fn parse_bracket_tag(text: &str, start: usize) -> Option<(usize, String)> {
+    if text[start..].starts_with("[-]") {
+        return Some((start + 3, text[start..start + 3].to_string()));
+    }
+
+    let hex = text.get(start + 1..start + 7)?;
+    if !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    if text.as_bytes().get(start + 7) != Some(&b']') {
+        return None;
+    }
+
+    let end = start + 8;
+    Some((end, text[start..end].to_string()))
+}
+
+/// A six-hex-digit run that cannot be a colour tag because it is not closed by
+/// `]` and is not part of a longer hex run.
+///
+/// A longer run such as `[FF7700AA]` is ordinary text, per the agreed grammar.
+fn looks_like_known_bracket_tag(rest: &str) -> bool {
+    let Some(after_open) = rest.strip_prefix('[') else {
+        return false;
+    };
+
+    let mut characters = after_open.chars();
+    for _ in 0..6 {
+        if !characters
+            .next()
+            .is_some_and(|character| character.is_ascii_hexdigit())
+        {
+            return false;
+        }
+    }
+
+    match characters.next() {
+        None => true,
+        Some(']') => false,
+        Some(character) => !character.is_ascii_hexdigit(),
+    }
 }
 
 /// Find a non-empty value ending at `>`, returning the index just past it.
@@ -281,6 +339,44 @@ mod tests {
     fn unknown_angle_brackets_are_text() {
         let tokens = extract("a < b, <i18n>, <foo bar>").expect("tokens");
         assert!(tokens.is_empty());
+    }
+
+    #[test]
+    fn extracts_bracket_colour_tokens_in_source_order() {
+        let tokens = extract("[FF7700]two[-] herbs").expect("tokens");
+        assert_eq!(texts(&tokens), vec!["[FF7700]", "[-]"]);
+    }
+
+    #[test]
+    fn bracket_hex_is_case_insensitive_but_captured_exactly() {
+        let tokens = extract("[ff7700]x[-]").expect("tokens");
+        assert_eq!(texts(&tokens), vec!["[ff7700]", "[-]"]);
+    }
+
+    #[test]
+    fn bracket_like_text_is_not_a_token() {
+        let tokens = extract("[#FF7700] [FF7700AA] [b] [/b] [url=x] [hello] [12345] [] [1234567]")
+            .expect("tokens");
+        assert!(tokens.is_empty());
+    }
+
+    #[test]
+    fn unclosed_bracket_colour_tag_is_an_error() {
+        assert!(extract("[FF7700").is_err());
+        assert!(extract("[ff7700 x").is_err());
+        assert!(extract("[FF7700\u{4e2d}").is_err());
+    }
+
+    #[test]
+    fn bracket_tokens_participate_in_positional_matching() {
+        let source = extract("[FF7700]two[-]").expect("tokens");
+        let same = extract("[FF7700]deux[-]").expect("tokens");
+        let reordered = extract("[-]two[FF7700]").expect("tokens");
+        let missing = extract("[FF7700]two").expect("tokens");
+
+        assert!(matches(&source, &same));
+        assert!(!matches(&source, &reordered));
+        assert!(!matches(&source, &missing));
     }
 
     #[test]

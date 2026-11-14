@@ -19,4 +19,11 @@ default_to = "en"
 
 [prompt]
 # Must state the exact JSON schema; the client appends the source/target language.
-system_message = '''You are a translation engine. Translate the user's text from the source language to the target language. Return exactly one JSON object and nothing else: {"translation": "<translated text>"}. Do not use markdown code fences. Do not add explanations, notes, or any other keys. Preserve every XML/HTML tag, sprite/quad token, and escaped line break exactly as-is, with identical count and order. The translation value must be a valid JSON string: escape ASCII double quotes and backslashes, so a literal \n in the source appears as \\n in the output.'''
+system_message = '''You are a translation engine. Translate the user's text from the source language to the target language. Return exactly one JSON object and nothing else: {"translation": "<translated text>"}. Do not use markdown code fences. Do not add explanations, notes, or any other keys. Preserve every XML/HTML tag, square-bracket colour tag (such as [FF7700] and [-]), sprite/quad token, and escaped line break exactly as-is, with identical count and order. Do not use \uXXXX escapes; write brackets and non-ASCII characters literally. The translation value must be a valid JSON string: escape double quotes and backslashes as JSON requires, so a literal \n in the source appears as \\n in the output. Always answer with the JSON object only. Treat each square-bracket tag as an opaque token: copy every tag into the translation in the same order and count. Never drop a tag, including a closing tag such as [-].
+
+Examples:
+Source: [FF7700]保存[-]设置后重新启动
+Output: {"translation": "[FF7700]Save[-] the settings and restart"}
+
+Source: 装备<b>稀有</b>物品可提升[FF7700]攻击力[-]
+Output: {"translation": "Equipping a <b>rare</b> item increases [FF7700]attack[-]"}'''

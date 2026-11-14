@@ -130,7 +130,7 @@ async fn invalid_language_tag_is_a_200_passthrough() {
 #[tokio::test]
 async fn rendering_tokens_are_returned_unchanged() {
     let app = app().await;
-    let original = "<color=red>Hello</color> <b>world</b> <br/>";
+    let original = "<color=red>Hello</color> [FF7700]world[-] <b>!</b> <br/>";
     let encoded = urlencoding::encode(original);
     let (status, _, body) = common::request(&app, "GET", &format!("/?text={encoded}")).await;
     assert_eq!(status, StatusCode::OK);
@@ -141,6 +141,16 @@ async fn rendering_tokens_are_returned_unchanged() {
 async fn malformed_rendering_token_is_a_200_passthrough() {
     let app = app().await;
     let original = "<color=red";
+    let encoded = urlencoding::encode(original);
+    let (status, _, body) = common::request(&app, "GET", &format!("/?text={encoded}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, original);
+}
+
+#[tokio::test]
+async fn malformed_bracket_token_is_a_200_passthrough() {
+    let app = app().await;
+    let original = "[FF7700";
     let encoded = urlencoding::encode(original);
     let (status, _, body) = common::request(&app, "GET", &format!("/?text={encoded}")).await;
     assert_eq!(status, StatusCode::OK);

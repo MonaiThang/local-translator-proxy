@@ -3,7 +3,9 @@
 //! Sends one physical line per non-streaming Ollama-compatible `/api/chat`
 //! request, appends the language directive to the configured system message,
 //! and parses the structured `translation` field. Transport and schema failures
-//! become [`RuntimeError`] for the pipeline to turn into a passthrough.
+//! become [`RuntimeError`] for the pipeline to turn into a passthrough. A
+//! literal `\uXXXX` sequence that the model double-escaped is decoded once
+//! before the pipeline verifies the line.
 
 use std::time::Duration;
 
@@ -150,7 +152,7 @@ impl RuntimeClient {
             }
         })?;
 
-        parse_response(&value)
+        parse_response(&value, line)
     }
 
     fn system_message(&self, from: &str, to: &str) -> String {
@@ -172,10 +174,10 @@ fn map_network_error(error: reqwest::Error) -> RuntimeError {
 
 /// Accept either a top-level `translation` field or Ollama's assistant message
 /// content containing the same structured JSON.
-fn parse_response(value: &Value) -> Result<String, RuntimeError> {
+fn parse_response(value: &Value, source: &str) -> Result<String, RuntimeError> {
     // Runtime-agnostic shape: the body itself carries the structured field.
     if value.get("translation").is_some() {
-        return parse_translation(&value.to_string());
+        return parse_translation(&value.to_string(), source);
     }
 
     // Reference target (Ollama): the structured field is inside the assistant
@@ -184,14 +186,24 @@ fn parse_response(value: &Value) -> Result<String, RuntimeError> {
         .pointer("/message/content")
         .and_then(Value::as_str)
         .ok_or(RuntimeError::Schema)?;
-    parse_translation(normalize_assistant_content(content))
+    parse_translation(normalize_assistant_content(content), source)
 }
 
-/// Deserialize the strict structured payload and reject an empty translation.
-fn parse_translation(content: &str) -> Result<String, RuntimeError> {
+/// Deserialize the strict structured payload, repair double-escaped unicode,
+/// and reject an empty translation.
+fn parse_translation(content: &str, source: &str) -> Result<String, RuntimeError> {
     let output: TranslationOutput =
         serde_json::from_str(content).map_err(|_| RuntimeError::Schema)?;
-    non_empty(&output.translation)
+    let translation = decode_literal_escapes(&output.translation, source);
+    if translation != output.translation {
+        tracing::debug!(
+            source = ?source,
+            escaped = ?output.translation,
+            decoded = ?translation,
+            "decoded literal unicode escapes"
+        );
+    }
+    non_empty(&translation)
 }
 
 /// Normalize assistant content before JSON parsing.
@@ -223,6 +235,82 @@ fn normalize_assistant_content(content: &str) -> &str {
     }
 }
 
+/// Decode one remaining layer of JSON-style `\uXXXX` escapes that the model
+/// introduced inside the translation value.
+///
+/// `serde_json` already decodes the wire layer. A sequence that survives into
+/// the translation string was double-escaped by the model. Sequences that also
+/// appear literally in the source are left untouched so game text that shows an
+/// escape is not rewritten.
+fn decode_literal_escapes(translation: &str, source: &str) -> String {
+    let bytes = translation.as_bytes();
+    let mut decoded = String::with_capacity(translation.len());
+    let mut index = 0;
+
+    while index < bytes.len() {
+        if bytes[index] == b'\\'
+            && let Some((end, sequence, code)) = parse_unicode_escape(translation, index)
+        {
+            if source.contains(sequence) {
+                decoded.push_str(sequence);
+                index = end;
+                continue;
+            }
+
+            if let Some((pair_end, pair_sequence, low)) = parse_unicode_escape(translation, end)
+                && !source.contains(pair_sequence)
+                && (0xD800..=0xDBFF).contains(&code)
+                && (0xDC00..=0xDFFF).contains(&low)
+                && let Some(character) =
+                    char::from_u32(0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00))
+            {
+                decoded.push(character);
+                index = pair_end;
+                continue;
+            }
+
+            if let Some(character) = char::from_u32(code) {
+                decoded.push(character);
+                index = end;
+                continue;
+            }
+
+            // Lone surrogates are not valid Unicode scalars: keep them literal.
+            decoded.push_str(sequence);
+            index = end;
+            continue;
+        }
+
+        let character = translation[index..]
+            .chars()
+            .next()
+            .expect("index is within the string");
+        decoded.push(character);
+        index += character.len_utf8();
+    }
+
+    decoded
+}
+
+/// Parse a literal `\uXXXX` sequence at `start`, returning its end, text, and
+/// code point. Only lowercase `u` is recognised; JSON uses no other form.
+fn parse_unicode_escape(text: &str, start: usize) -> Option<(usize, &str, u32)> {
+    let end = start + 6;
+    let sequence = text.get(start..end)?;
+    let mut characters = sequence.chars();
+    if characters.next()? != '\\' || characters.next()? != 'u' {
+        return None;
+    }
+
+    let hex = sequence.get(2..)?;
+    if !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+
+    let code = u32::from_str_radix(hex, 16).ok()?;
+    Some((end, sequence, code))
+}
+
 /// Reject an absent or whitespace-only translation.
 fn non_empty(translation: &str) -> Result<String, RuntimeError> {
     if translation.trim().is_empty() {
@@ -240,7 +328,7 @@ mod tests {
     #[test]
     fn parses_top_level_translation() {
         let value = json!({ "translation": "Hello" });
-        assert_eq!(parse_response(&value).expect("translation"), "Hello");
+        assert_eq!(parse_response(&value, "").expect("translation"), "Hello");
     }
 
     #[test]
@@ -248,7 +336,7 @@ mod tests {
         let value = json!({
             "message": { "role": "assistant", "content": "{\"translation\":\"Hello\"}" }
         });
-        assert_eq!(parse_response(&value).expect("translation"), "Hello");
+        assert_eq!(parse_response(&value, "").expect("translation"), "Hello");
     }
 
     #[test]
@@ -256,7 +344,7 @@ mod tests {
         let value = json!({
             "message": { "content": "```json\n{\"translation\":\"Hello\"}\n```" }
         });
-        assert_eq!(parse_response(&value).expect("translation"), "Hello");
+        assert_eq!(parse_response(&value, "").expect("translation"), "Hello");
     }
 
     #[test]
@@ -264,7 +352,7 @@ mod tests {
         let value = json!({
             "message": { "content": "```\n{\"translation\":\"Hello\"}\n```" }
         });
-        assert_eq!(parse_response(&value).expect("translation"), "Hello");
+        assert_eq!(parse_response(&value, "").expect("translation"), "Hello");
     }
 
     #[test]
@@ -272,7 +360,7 @@ mod tests {
         let value = json!({
             "message": { "content": "```json {\"translation\":\"Hello\"} ```" }
         });
-        assert_eq!(parse_response(&value).expect("translation"), "Hello");
+        assert_eq!(parse_response(&value, "").expect("translation"), "Hello");
     }
 
     #[test]
@@ -280,7 +368,7 @@ mod tests {
         let value = json!({
             "message": { "content": "``` json\n{\"translation\":\"Hello\"}\n```" }
         });
-        assert_eq!(parse_response(&value).expect("translation"), "Hello");
+        assert_eq!(parse_response(&value, "").expect("translation"), "Hello");
     }
 
     #[test]
@@ -288,7 +376,7 @@ mod tests {
         let value = json!({
             "message": { "content": "````json\n{\"translation\":\"Hello\"}\n````" }
         });
-        assert_eq!(parse_response(&value).expect("translation"), "Hello");
+        assert_eq!(parse_response(&value, "").expect("translation"), "Hello");
     }
 
     #[test]
@@ -298,13 +386,19 @@ mod tests {
                 "content": "Here is the translation:\n```json\n{\"translation\":\"Hello\"}\n```"
             }
         });
-        assert!(matches!(parse_response(&value), Err(RuntimeError::Schema)));
+        assert!(matches!(
+            parse_response(&value, ""),
+            Err(RuntimeError::Schema)
+        ));
     }
 
     #[test]
     fn rejects_extra_fields_in_top_level_translation() {
         let value = json!({ "translation": "Hello", "notes": "extra" });
-        assert!(matches!(parse_response(&value), Err(RuntimeError::Schema)));
+        assert!(matches!(
+            parse_response(&value, ""),
+            Err(RuntimeError::Schema)
+        ));
     }
 
     #[test]
@@ -312,14 +406,17 @@ mod tests {
         let value = json!({
             "message": { "content": "{\"translation\":\"Hello\",\"notes\":\"extra\"}" }
         });
-        assert!(matches!(parse_response(&value), Err(RuntimeError::Schema)));
+        assert!(matches!(
+            parse_response(&value, ""),
+            Err(RuntimeError::Schema)
+        ));
     }
 
     #[test]
     fn rejects_empty_translation() {
         let value = json!({ "translation": "   " });
         assert!(matches!(
-            parse_response(&value),
+            parse_response(&value, ""),
             Err(RuntimeError::EmptyTranslation)
         ));
     }
@@ -327,12 +424,75 @@ mod tests {
     #[test]
     fn rejects_missing_fields() {
         assert!(matches!(
-            parse_response(&json!({ "message": { "role": "assistant" } })),
+            parse_response(&json!({ "message": { "role": "assistant" } }), ""),
             Err(RuntimeError::Schema)
         ));
         assert!(matches!(
-            parse_response(&json!({ "message": { "content": "not json" } })),
+            parse_response(&json!({ "message": { "content": "not json" } }), ""),
             Err(RuntimeError::Schema)
+        ));
+    }
+
+    #[test]
+    fn decodes_literal_unicode_escapes_once() {
+        assert_eq!(
+            decode_literal_escapes(r"\u005bFF7700\u005d", ""),
+            "[FF7700]"
+        );
+        assert_eq!(decode_literal_escapes(r"\u4f60\u597d", ""), "你好");
+        assert_eq!(
+            decode_literal_escapes(r"\u005BFF7700\u005D", ""),
+            "[FF7700]"
+        );
+        assert_eq!(
+            decode_literal_escapes(r"\u005cu005b", ""),
+            r"\u005b",
+            "only one layer is decoded"
+        );
+    }
+
+    #[test]
+    fn leaves_source_literal_escapes_untouched() {
+        assert_eq!(
+            decode_literal_escapes(r"keep \u005b literal", r"\u005b"),
+            r"keep \u005b literal"
+        );
+    }
+
+    #[test]
+    fn decodes_surrogate_pairs_and_keeps_lone_surrogates() {
+        assert_eq!(decode_literal_escapes(r"\uD83D\uDE00", ""), "😀");
+        assert_eq!(decode_literal_escapes(r"\uD83D x", ""), r"\uD83D x");
+        assert_eq!(decode_literal_escapes(r"\uDE00", ""), r"\uDE00");
+    }
+
+    #[test]
+    fn leaves_incomplete_and_non_hex_escapes() {
+        assert_eq!(
+            decode_literal_escapes(r"\u12G4 \u12 \u", ""),
+            r"\u12G4 \u12 \u"
+        );
+    }
+
+    #[test]
+    fn parse_response_repairs_double_escaped_message_content() {
+        let value = json!({
+            "message": {
+                "content": r#"{"translation":"\\u005bFF7700\\u005d"}"#
+            }
+        });
+        assert_eq!(
+            parse_response(&value, "[FF7700]").expect("translation"),
+            "[FF7700]"
+        );
+    }
+
+    #[test]
+    fn decodes_before_the_empty_check() {
+        let value = json!({ "translation": r"\u0020" });
+        assert!(matches!(
+            parse_response(&value, ""),
+            Err(RuntimeError::EmptyTranslation)
         ));
     }
 

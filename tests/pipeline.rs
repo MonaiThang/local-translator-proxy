@@ -36,7 +36,7 @@ async fn translates_a_single_line() {
 }
 
 #[tokio::test]
-async fn sends_the_schema_and_escaping_instructions_to_the_runtime() {
+async fn sends_the_schema_and_rendering_instructions_to_the_runtime() {
     let (app, state) = app(common::Behavior::Prefix("EN: ")).await;
     let _ = common::request(&app, "GET", &format!("/?text={}", encode("你好"))).await;
 
@@ -47,7 +47,9 @@ async fn sends_the_schema_and_escaping_instructions_to_the_runtime() {
         .expect("system message");
 
     assert!(system.contains(r#"{"translation": "<translated text>"}"#));
-    assert!(system.contains("escape ASCII double quotes and backslashes"));
+    assert!(system.contains("square-bracket colour tag"));
+    assert!(system.contains("[FF7700]"));
+    assert!(system.contains(r"Do not use \uXXXX escapes"));
     assert!(system.contains("Source language: zh-cn"));
     assert!(system.contains("Target language: en"));
 }
@@ -123,6 +125,92 @@ async fn token_preserving_translation_is_accepted() {
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body, "<color=red>Bonjour</color> <b>world</b>");
+}
+
+#[tokio::test]
+async fn double_escaped_bracket_tokens_are_restored() {
+    let (app, _) = app(common::Behavior::DoubleEscapedBrackets).await;
+    let original = "pick [FF7700]two[-] herbs";
+    let (status, _, body) =
+        common::request(&app, "GET", &format!("/?text={}", encode(original))).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, original);
+}
+
+#[tokio::test]
+async fn bracket_token_mismatch_returns_the_whole_original_unit() {
+    let (app, _) = app(common::Behavior::ReplaceWhenContaining {
+        needle: "[FF7700]",
+        replacement: "",
+    })
+    .await;
+    let original = "ok\npick [FF7700]two[-] herbs";
+    let (status, _, body) =
+        common::request(&app, "GET", &format!("/?text={}", encode(original))).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, original);
+}
+
+#[tokio::test]
+async fn unclosed_bracket_colour_tag_makes_no_model_calls() {
+    let (app, state) = app(common::Behavior::Echo).await;
+    let original = "ok\npick [FF7700";
+    let (status, _, body) =
+        common::request(&app, "GET", &format!("/?text={}", encode(original))).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, original);
+    assert_eq!(common::request_count(&state), 0);
+}
+
+#[tokio::test]
+async fn source_literal_unicode_escape_is_not_decoded() {
+    let (app, _) = app(common::Behavior::Echo).await;
+    let original = r"keep \u005b literal";
+    let (status, _, body) =
+        common::request(&app, "GET", &format!("/?text={}", encode(original))).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, original);
+}
+
+#[tokio::test]
+async fn decoded_line_break_returns_the_whole_original_unit() {
+    let (app, _) = app(common::Behavior::ReplaceWhenContaining {
+        needle: "NL",
+        replacement: r"A\u000aB",
+    })
+    .await;
+    let original = "NL";
+    let (status, _, body) =
+        common::request(&app, "GET", &format!("/?text={}", encode(original))).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, original);
+}
+
+#[tokio::test]
+async fn logs_repaired_escapes_at_debug() {
+    let (app, _) = app(common::Behavior::DoubleEscapedBrackets).await;
+    let original = "[FF7700]two[-]";
+    let ((status, _, body), logs) =
+        common::capture_logs("local_translator_proxy=debug", || async {
+            common::request(&app, "GET", &format!("/?text={}", encode(original))).await
+        })
+        .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, original);
+    assert!(
+        logs.contains("decoded literal unicode escapes"),
+        "logs: {logs}"
+    );
+    assert!(
+        logs.contains(r#"translated="[FF7700]two[-]""#),
+        "logs: {logs}"
+    );
 }
 
 #[tokio::test]
