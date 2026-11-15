@@ -12,7 +12,7 @@
 .PARAMETER Scenario
   doctor | translate | multi-line-tokens | passthrough-mismatch |
   passthrough-injected-newline | passthrough-timeout | passthrough-runtime-down |
-  no-model-call
+  no-model-call | warm-up
 
 .PARAMETER ProxyPort
   Loopback port for the proxy. Default 5099 (never the game's 5000).
@@ -32,7 +32,8 @@ param(
         'passthrough-injected-newline',
         'passthrough-timeout',
         'passthrough-runtime-down',
-        'no-model-call'
+        'no-model-call',
+        'warm-up'
     )]
     [string]$Scenario = 'translate',
     [int]$ProxyPort = 5099,
@@ -53,6 +54,7 @@ New-Item -ItemType Directory -Force -Path $evidence | Out-Null
 $proxy = $null
 $stub = $null
 $checks = [System.Collections.Generic.List[object]]::new()
+$expectedLog = [System.Collections.Generic.List[object]]::new()
 $requestIndex = 0
 
 function Add-Check([string]$Name, [bool]$Pass, [string]$Detail) {
@@ -118,11 +120,20 @@ function Get-StubRequests {
     @(Invoke-RestMethod -Uri "http://127.0.0.1:$StubPort/requests" -TimeoutSec 10)
 }
 
-# Scenario setup: stub mode, stub delay, proxy deadline, and whether a stub runs.
+function Expect-ProxyLog([string]$Name, [string]$Pattern) {
+    $expectedLog.Add([pscustomobject]@{ name = $Name; pattern = $Pattern })
+}
+
+# Scenario setup: stub mode, stub delay, proxy deadline, whether a stub runs,
+# and whether the startup warm-up runs. The tracked default is warm_up = true,
+# but every scenario that counts model calls turns it off so the count describes
+# the game request alone. `warm-up` and `passthrough-runtime-down` keep the
+# default and assert the startup call themselves.
 $stubMode = 'translate'
 $stubDelayMs = 0
 $timeoutSecs = 5
 $runStub = $true
+$warmUp = $false
 
 switch ($Scenario) {
     'doctor' { }
@@ -131,8 +142,9 @@ switch ($Scenario) {
     'passthrough-mismatch' { $stubMode = 'mismatch' }
     'passthrough-injected-newline' { $stubMode = 'inject' }
     'passthrough-timeout' { $stubDelayMs = 3000; $timeoutSecs = 1 }
-    'passthrough-runtime-down' { $runStub = $false; $timeoutSecs = 2 }
+    'passthrough-runtime-down' { $runStub = $false; $timeoutSecs = 2; $warmUp = $true }
     'no-model-call' { }
+    'warm-up' { $warmUp = $true }
     default { throw "unhandled scenario $Scenario" }
 }
 
@@ -163,6 +175,7 @@ try {
     $env:TRANSLATOR_PROXY_MODEL_RUNTIME_ENDPOINT = "http://127.0.0.1:$StubPort/api/chat"
     $env:TRANSLATOR_PROXY_MODEL_RUNTIME_TIMEOUT_SECS = "$timeoutSecs"
     $env:TRANSLATOR_PROXY_MODEL_RUNTIME_MAX_IN_FLIGHT = '4'
+    $env:TRANSLATOR_PROXY_MODEL_RUNTIME_WARM_UP = if ($warmUp) { 'true' } else { 'false' }
     $env:RUST_LOG = 'info'
 
     $proxy = Start-Process -FilePath $exe -WorkingDirectory $repo -PassThru -NoNewWindow `
@@ -223,6 +236,10 @@ try {
             Add-Check 'whole unit respects the 1s deadline' ($result.elapsedMs -lt 2500) "elapsedMs=$($result.elapsedMs)"
         }
         'passthrough-runtime-down' {
+            # Warm-up is enabled here: a runtime that is down at startup must
+            # not stop the proxy from serving, and the failure must be logged.
+            # The log is read after teardown, when the redirect handle is free.
+            Expect-ProxyLog 'failed warm-up is logged at warn' 'warm-up failed'
             $result = Invoke-Proxy '你好'
             Add-Check 'status is 200' ($result.status -eq 200) "status=$($result.status)"
             Add-Check 'unreachable runtime yields the original bytes' ($result.bodyUtf8 -ceq '你好') "body=$($result.bodyUtf8)"
@@ -243,6 +260,27 @@ try {
 
             Add-Check 'zero model calls' ((Get-StubRequests).Count -eq 0) "modelCalls=$((Get-StubRequests).Count)"
         }
+        'warm-up' {
+            # Warm-up runs after bind, so readiness does not guarantee it has
+            # reached the stub yet. Wait for the call, then identify it.
+            $called = Wait-Until { (Get-StubRequests).Count -ge 1 } 20
+            $startup = Get-StubRequests
+            Add-Check 'warm-up reaches the runtime at startup' $called "modelCalls=$($startup.Count)"
+            Add-Check 'warm-up sends exactly one model call' ($startup.Count -eq 1) "modelCalls=$($startup.Count)"
+
+            $warmUpLine = if ($startup.Count -ge 1) { $startup[0].line } else { '' }
+            Add-Check 'warm-up translates the short warm-up line' ($warmUpLine -ceq '你好') "line=$warmUpLine"
+            Expect-ProxyLog 'completed warm-up is logged' 'warm-up completed'
+
+            $result = Invoke-Proxy '你好'
+            Add-Check 'status is 200 after warm-up' ($result.status -eq 200) "status=$($result.status)"
+            Add-Check 'translated body after warm-up' ($result.bodyUtf8 -ceq 'EN:你好') "body=$($result.bodyUtf8)"
+            Add-Check 'warm-up plus one game request is two model calls' ((Get-StubRequests).Count -eq 2) "modelCalls=$((Get-StubRequests).Count)"
+
+            # Let the warm-up task finish its log line before teardown; the
+            # stub call above already happened and the log follows it.
+            Start-Sleep -Milliseconds 250
+        }
     }
 } catch {
     Add-Check 'run completed without error' $false $_.Exception.Message
@@ -256,6 +294,14 @@ try {
                 Write-Warning "could not stop PID $($process.Id): $($_.Exception.Message)"
             }
         }
+    }
+
+    # The proxy's redirected stdout is not readable while it runs on Windows.
+    # Read proxy.log only after the processes above are stopped.
+    $proxyLogPath = Join-Path $evidence 'proxy.log'
+    $proxyLog = if (Test-Path $proxyLogPath) { [IO.File]::ReadAllText($proxyLogPath) } else { '' }
+    foreach ($expectation in $expectedLog) {
+        Add-Check $expectation.name $proxyLog.Contains($expectation.pattern) "proxy.log contains `"$($expectation.pattern)`""
     }
 
     $failed = @($checks | Where-Object { -not $_.passed })

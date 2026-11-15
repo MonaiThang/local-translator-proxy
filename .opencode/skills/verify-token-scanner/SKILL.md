@@ -68,9 +68,11 @@ cargo +stable-x86_64-pc-windows-gnu test --test formal_tokens
 
 ## Coverage record
 
-Verified code, at commit `50aada9047b029199e46ffe6c40621e43d7d7c9a` (the HEAD
-when this check was generated; the test file and dev-dependency were added
-afterward and are not yet committed):
+Verified code, at commit `06487c3dbc216066df747d8076b3c3934c7b5cc8` (the HEAD
+at the last sync). The check was generated at `50aada9`; the test file and
+dev-dependency were committed in `f7dd0c3`. `src/tokens.rs` is unchanged since
+`50aada9`, so the previous coverage still describes it. The property passed at
+`06487c3` on 2026-11-15.
 
 | File | Functions | What the property covers |
 |---|---|---|
@@ -96,7 +98,10 @@ When the test or the scanner changes materially, re-confirm the check can fail:
    `tests/formal_tokens.proptest-regressions` if the scratch run created it.
 
 That exact failure was observed when this skill was generated, on
-2026-11-14, from commit `50aada9`.
+2026-11-14, from commit `50aada9`. It was re-confirmed on 2026-11-15 at the sync
+commit `06487c3` with the same mutation and the same minimal input
+`<color=red>`; the `formal_tokens.proptest-regressions` file from that run was
+deleted.
 
 ## What this does not cover
 

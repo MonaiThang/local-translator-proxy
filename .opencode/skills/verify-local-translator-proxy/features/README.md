@@ -22,6 +22,10 @@ Ollama process.
 - Point `TRANSLATOR_PROXY_MODEL_RUNTIME_ENDPOINT` at the stub on an isolated
   port (`-StubPort 7331`). Never point a verification run at the user's real
   Ollama instance.
+- Set `TRANSLATOR_PROXY_MODEL_RUNTIME_WARM_UP=false` for any run that counts
+  model calls, unless the run is about warm-up. The tracked default is `true`,
+  and the startup call would otherwise be counted as a game call. The helper
+  sets this per scenario.
 - Do not edit `config.toml`. Environment overrides are enough and keep the
   tracked defaults intact.
 - Never drive an instance this run did not start. If a port is busy, choose
@@ -69,3 +73,5 @@ and `Gotchas`.
   units, unsupported pairs, and blank lines that never reach the model.
 - [Unit deadline](./unit-deadline.md) covers one wall-clock budget for the whole
   Translation Unit, including permit waits and model calls.
+- [Startup warm-up](./warm-up.md) covers the one best-effort model call at
+  startup and serving after a failed warm-up.

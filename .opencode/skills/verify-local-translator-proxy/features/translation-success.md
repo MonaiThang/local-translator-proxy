@@ -26,6 +26,8 @@ Preconditions:
 - The current tree builds with the GNU toolchain.
 - Ports `5099` and `7331` are free (or pass `-ProxyPort`/`-StubPort`).
 - The stub runs in `translate` mode, which prefixes `EN:` to each line.
+- The helper disables the startup warm-up, so each model-call count below is
+  the game request's calls alone.
 
 - **Single line.** Run
   `pwsh -NoProfile -File .opencode/skills/verify-local-translator-proxy/scripts/verify.ps1 -Scenario translate`.
@@ -35,7 +37,8 @@ Preconditions:
   `-Scenario multi-line-tokens`. The request is `你好\r\n<b>世界</b>`; the body
   hex contains `0D0A` between the lines, both `<b>` and `</b>` survive, and the
   summary reports exactly two model calls.
-- **Blank line in the middle.** From a manual run, request
+- **Blank line in the middle.** From a manual run with
+  `TRANSLATOR_PROXY_MODEL_RUNTIME_WARM_UP=false`, request
   `text=你好\r\n\r\n世界` and confirm the empty middle line is returned
   unchanged and only two model calls appear in `GET /requests` on the stub.
 - **Proof.** Read the run's `summary.json`, `body-1.bin`, and `response-1.json`.

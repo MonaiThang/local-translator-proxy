@@ -1,6 +1,6 @@
 ---
 name: verify-local-translator-proxy
-description: Drive the real local-translator-proxy binary over HTTP and prove game-facing behavior — translation, Passthrough Responses, model-call suppression, and the whole-unit deadline. Use when a change touches the inbound handler, pipeline, line/token handling, runtime client, or when you need evidence that the proxy still returns 200 + plain UTF-8 text.
+description: Drive the real local-translator-proxy binary over HTTP and prove game-facing behavior — translation, Passthrough Responses, model-call suppression, startup warm-up, and the whole-unit deadline. Use when a change touches the inbound handler, pipeline, line/token handling, runtime client, startup, or when you need evidence that the proxy still returns 200 + plain UTF-8 text.
 ---
 
 # Verify the Translation Proxy
@@ -32,6 +32,10 @@ $env:TRANSLATOR_PROXY_SERVER_LISTEN_ADDR = "127.0.0.1:5099"
 $env:TRANSLATOR_PROXY_MODEL_RUNTIME_ENDPOINT = "http://127.0.0.1:7331/api/chat"
 $env:TRANSLATOR_PROXY_MODEL_RUNTIME_TIMEOUT_SECS = "5"
 $env:TRANSLATOR_PROXY_MODEL_RUNTIME_MAX_IN_FLIGHT = "4"
+# The tracked default is true. Turn it off for a manual run that counts model
+# calls, so the count describes the game request; the helper does this itself
+# for every scenario except `warm-up` and `passthrough-runtime-down`.
+$env:TRANSLATOR_PROXY_MODEL_RUNTIME_WARM_UP = "false"
 $env:RUST_LOG = "info"
 target\debug\local-translator-proxy.exe
 ```
@@ -41,6 +45,11 @@ Ready means: `target\debug\local-translator-proxy.exe` logged
 `GET /?text=%7Btext%7D` returned `200` with `text/plain; charset=utf-8`. The
 literal `{text}` placeholder is the safe probe: it never reaches the model, so
 it does not disturb the model-call counter.
+
+When `model_runtime.warm_up` is true (the tracked default), startup also sends
+one translation of `你好` to the runtime before the first game request. That call
+is real, so a run that counts model calls must disable it or attribute it. The
+helper disables it everywhere except `warm-up` and `passthrough-runtime-down`.
 
 The helper does launch, readiness, drive, and teardown in one command (see
 Helpers). Prefer it; use the manual commands when you need to stay attached.
@@ -70,8 +79,9 @@ Scenarios, each one real user path end to end:
 | `passthrough-mismatch` | A model answer that drops a Rendering Token yields the original unit. |
 | `passthrough-injected-newline` | A model answer containing a real newline yields the original unit. |
 | `passthrough-timeout` | A slow runtime yields the original unit inside the unit deadline. |
-| `passthrough-runtime-down` | A closed runtime endpoint yields the original unit, still `200`. |
+| `passthrough-runtime-down` | A closed runtime endpoint yields the original unit, still `200`; a failed startup warm-up is logged and does not stop the proxy. |
 | `no-model-call` | `{text}`, whitespace-only, and unsupported pairs make zero model calls. |
+| `warm-up` | Startup sends exactly one translation of `你好`, logs completion, and later requests add their own calls. |
 
 Run one with:
 
@@ -136,6 +146,27 @@ pwsh -NoProfile -File .opencode/skills/verify-local-translator-proxy/scripts/ver
   `GET /requests` lists every line that reached the model; `POST /reset` clears
   it; `GET /health` reports readiness.
 
+## Coverage record
+
+Verified against the real binary at commit
+`06487c3dbc216066df747d8076b3c3934c7b5cc8` (HEAD at this sync). The previous
+sync was the commit that added this skill (`f7dd0c3`), which did not record
+covered code; this table starts here.
+
+| File | What the scenarios cover |
+|---|---|
+| `src/http.rs` | Any-path `GET`, `text`/`from`/`to` parsing, `200` + `text/plain; charset=utf-8`. |
+| `src/pipeline.rs` | Placeholder, blank, and allowlist suppression; one call per non-blank line; token and injected-line-break rejection; whole-unit deadline; startup warm-up call and its best-effort failure. |
+| `src/lines.rs` | `\r\n` preservation and reassembly on translated and passthrough paths. |
+| `src/tokens.rs` | Token extraction and positional match on the translated and rejected paths. |
+| `src/runtime.rs` | Request/response round trip through the stub, timeout and unreachable mapping. |
+| `src/main.rs` | Bind, startup warm-up spawn, serve, shutdown. |
+| `src/config.rs` | The env overrides in the launch block, including `warm_up`. |
+
+Before moving the sync commit forward, diff these files from it, read the commit
+messages, and rerun every scenario. A new model call outside a Translation Unit
+changes the model-call counters; a new startup step may need its own scenario.
+
 ## What this does not cover
 
 - Translation quality or the real Ollama model. That is the Translation Corpus,
@@ -143,4 +174,10 @@ pwsh -NoProfile -File .opencode/skills/verify-local-translator-proxy/scripts/ver
 - The game's XUnity.AutoTranslator integration on port 5000.
 - Concurrency beyond the configured cap. `multi-line-tokens` proves one call
   per non-blank line, not the peak in-flight bound (that has an integration
-  test in `tests/pipeline.rs`).
+  test in `tests/pipeline.rs`). Warm-up's share of a permit under request load
+  is likewise not exercised here.
+- The latency benefit of warm-up, `num_ctx`, and `keep_alive`. This skill proves
+  the warm-up call happens and is best effort; cold/warm timings are
+  `scripts/bench.ps1` against a real runtime.
+- Whether the runtime request carries `num_ctx` and `keep_alive`. The stub
+  ignores extra fields; `tests/runtime.rs` asserts the exact request body.

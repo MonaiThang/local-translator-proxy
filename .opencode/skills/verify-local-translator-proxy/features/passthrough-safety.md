@@ -29,11 +29,16 @@ Preconditions:
 - The current tree builds with the GNU toolchain.
 - Ports `5099` and `7331` are free, or pass alternatives.
 - The helper starts the stub in the mode each scenario names.
+- The helper disables the startup warm-up for the passthrough scenarios, so a
+  failed or slow runtime is not confused with a failed startup call. The
+  `passthrough-runtime-down` scenario is the exception: it keeps warm-up on to
+  prove the proxy serves after a failed warm-up.
 
 - **Unreachable runtime.** Run
   `pwsh -NoProfile -File .opencode/skills/verify-local-translator-proxy/scripts/verify.ps1 -Scenario passthrough-runtime-down`.
-  Status is `200`, content type is `text/plain; charset=utf-8`, and the body is
-  the original `你好` bytes.
+  Warm-up fails against the closed endpoint and logs `warm-up failed`; the
+  request still gets `200`, content type `text/plain; charset=utf-8`, and the
+  original `你好` bytes.
 - **Timeout.** Run the helper with `-Scenario passthrough-timeout`. The stub
   delays 3000 ms, the proxy budget is 1 s, and the summary shows the original
   bytes with `elapsedMs` below 2500.
@@ -42,7 +47,8 @@ Preconditions:
   original `<b>你好</b>` and one model call was attempted.
 - **Injected newline.** Run the helper with
   `-Scenario passthrough-injected-newline`. The response bytes contain no `0A`.
-- **Malformed source token.** Start a manual run, request
+- **Malformed source token.** Start a manual run with
+  `TRANSLATOR_PROXY_MODEL_RUNTIME_WARM_UP=false`, request
   `text=<b class="x">你好`, and confirm the body is the original bytes with zero
   model calls (the ambiguous token is found before any call).
 - **Proof.** `summary.json` records each check, `body-N.bin` holds the exact
@@ -58,5 +64,8 @@ Preconditions:
   Ollama instance; a slow real model would test the timeout path instead.
 - The proxy logs rejected model output at `warn` with the reason. Read
   `proxy.log` to tell a token mismatch from an injected newline.
+- The unreachable scenario also logs the failed startup warm-up at `warn`.
+  That line appears before the request and is not a request-level failure.
 - Malformed-token suppression is covered by `cargo test` today, not by a helper
-  scenario; drive it manually with `{text}` as above.
+  scenario; drive it manually with `{text}` as above. Disable warm-up first if
+  you are counting model calls.

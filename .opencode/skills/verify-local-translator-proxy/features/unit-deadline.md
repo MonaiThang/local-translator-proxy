@@ -25,13 +25,16 @@ Preconditions:
 - Ports `5099` and `7331` are free, or pass alternatives.
 - The stub is configured with `STUB_DELAY_MS=3000` and the proxy with
   `TRANSLATOR_PROXY_MODEL_RUNTIME_TIMEOUT_SECS=1`; the helper does both.
+- The helper disables the startup warm-up so the measured `elapsedMs` belongs to
+  the Translation Unit alone.
 
 - **Timeout path.** Run
   `pwsh -NoProfile -File .opencode/skills/verify-local-translator-proxy/scripts/verify.ps1 -Scenario passthrough-timeout`.
   Status is `200`, the body is the original `你好` bytes, and `elapsedMs` is
   under 2500.
 - **Tighten the bound manually.** Repeat a manual launch with
-  `TRANSLATOR_PROXY_MODEL_RUNTIME_TIMEOUT_SECS=1` and a stub delay of 5000 ms.
+  `TRANSLATOR_PROXY_MODEL_RUNTIME_WARM_UP=false`,
+  `TRANSLATOR_PROXY_MODEL_RUNTIME_TIMEOUT_SECS=1`, and a stub delay of 5000 ms.
   Confirm `proxy.log` contains `translation unit timed out` at `warn`.
 - **Proof.** `response-1.json` records `elapsedMs`; `proxy.log` records the
   timeout warning; `summary.json` records both checks.

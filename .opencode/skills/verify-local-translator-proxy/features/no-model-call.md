@@ -27,14 +27,16 @@ Preconditions:
 - The current tree builds with the GNU toolchain.
 - Ports `5099` and `7331` are free, or pass alternatives.
 - The stub runs in `translate` mode so any unexpected call is visible.
+- The helper disables the startup warm-up; otherwise the tracked default would
+  add one model call before any game request is made.
 
 - **All suppression paths.** Run
   `pwsh -NoProfile -File .opencode/skills/verify-local-translator-proxy/scripts/verify.ps1 -Scenario no-model-call`.
   It checks `{text}`, three spaces, `ja`→`en`, and `zh-CN`→`fr`, then asserts
   `modelCalls=0`.
-- **Blank line inside a translated unit.** Run a manual pair: request
-  `text=你好\r\n\r\n世界` and confirm only two entries appear at
-  `http://127.0.0.1:7331/requests`.
+- **Blank line inside a translated unit.** With a manual run started with
+  `TRANSLATOR_PROXY_MODEL_RUNTIME_WARM_UP=false`, request `text=你好\r\n\r\n世界`
+  and confirm only two entries appear at `http://127.0.0.1:7331/requests`.
 - **Defaults.** Request with no `from`/`to` parameters. The response is
   translated, proving the default pair `zh-CN`/`en` resolved.
 - **Proof.** `summary.json` lists each body check and the final model-call
@@ -43,7 +45,9 @@ Preconditions:
 ## Gotchas
 
 - The readiness probe itself uses `{text}`. If the counter looks off by one,
-  check whether the probe was counted; it should not be.
+  check whether the probe was counted; it should not be. A manual run with the
+  tracked warm-up default has one real startup call, so disable warm-up before
+  counting game-request calls.
 - `+` decodes to a space and `%2B` to a literal plus, matching the game's
   `HttpUtility.ParseQueryString`. Encode text with `[uri]::EscapeDataString`.
 - A pair is allowed only when both tags match after normalization. `zh-CN`→`en`
