@@ -100,6 +100,8 @@ async fn sends_expected_request_and_parses_content() {
     assert_eq!(request["stream"], false);
     assert_eq!(request["options"]["temperature"], 0);
     assert_eq!(request["options"]["seed"], 12345);
+    assert_eq!(request["options"]["num_ctx"], 8192);
+    assert_eq!(request["keep_alive"], 1800);
     assert_eq!(request["messages"].as_array().expect("messages").len(), 2);
 
     assert_eq!(request["messages"][0]["role"], "system");
@@ -111,6 +113,28 @@ async fn sends_expected_request_and_parses_content() {
 
     assert_eq!(request["messages"][1]["role"], "user");
     assert_eq!(request["messages"][1]["content"], "你好");
+}
+
+#[tokio::test]
+async fn sends_the_configured_num_ctx_and_keep_alive() {
+    let (uri, state) = spawn(Behavior::Translate("Hello")).await;
+    let mut config = Config::default();
+    config.model_runtime.endpoint = uri.to_string();
+    config.model_runtime.num_ctx = 4096;
+    config.model_runtime.keep_alive_secs = -1;
+    let client = RuntimeClient::new(&config.model_runtime, &config.prompt).expect("runtime client");
+
+    let translation = client
+        .translate_line("你好", "zh-cn", "en")
+        .await
+        .expect("translation");
+    assert_eq!(translation, "Hello");
+
+    let requests = state.requests.lock().expect("requests lock");
+    assert_eq!(requests.len(), 1);
+    let request = &requests[0];
+    assert_eq!(request["options"]["num_ctx"], 4096);
+    assert_eq!(request["keep_alive"], -1);
 }
 
 #[tokio::test]

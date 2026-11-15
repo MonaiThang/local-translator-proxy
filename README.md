@@ -169,6 +169,27 @@ weights, which leaves room for the game on an 8 GB card. The 12B and 27B builds
 need more VRAM than that leaves, so they are not the default. Point
 `model_runtime.model` at any other installed model to use a different one.
 
+### Tuning the Model Runtime
+
+An Ollama request inherits the server's context unless the caller pins one, and
+`translategemma:4b` declares a 131072-token maximum. On an 8 GB card that
+context does not fit VRAM, so the model spills to CPU and a cold load takes
+around 28 s, far past the 5 s whole-unit deadline. The proxy pins
+`model_runtime.num_ctx` (default `8192`) on every request so the model stays on
+the GPU.
+
+`model_runtime.keep_alive_secs` (default `1800`) holds the model loaded between
+bursts. `-1` keeps it loaded forever. Without residency a gap unloads the model
+and the next unit pays another cold load.
+
+`model_runtime.warm_up` (default `true`) translates one short line at startup,
+best effort. A warm-up failure is logged at `warn` and the proxy serves anyway.
+
+`OLLAMA_NUM_PARALLEL` must be greater than 1. With `1`, Ollama serialises calls
+and a multi-line unit queues behind itself inside the 5 s deadline.
+
+`ollama ps` should show the model at the configured context on 100% GPU.
+
 ## Configuration
 
 Configuration is read from `config.toml` in the working directory. The
@@ -184,6 +205,9 @@ overrides below.
 | `model_runtime.timeout_secs` | `5` | Deadline for one whole Translation Unit |
 | `model_runtime.max_in_flight` | `4` | Maximum concurrent Model Runtime calls |
 | `model_runtime.seed` | `12345` | Deterministic sampling seed |
+| `model_runtime.num_ctx` | `8192` | Context window pinned on every request |
+| `model_runtime.keep_alive_secs` | `1800` | Seconds the model stays loaded between requests; -1 = forever |
+| `model_runtime.warm_up` | `true` | Translate one line at startup to load the model |
 | `languages.supported_pairs` | `[["zh-CN", "en"]]` | Fixed source-to-target allowlist |
 | `languages.default_from` | `zh-CN` | Used when `from` is missing or empty |
 | `languages.default_to` | `en` | Used when `to` is missing or empty |
@@ -202,6 +226,9 @@ underscores inside section names, exactly as written here:
 | `TRANSLATOR_PROXY_MODEL_RUNTIME_TIMEOUT_SECS` |
 | `TRANSLATOR_PROXY_MODEL_RUNTIME_MAX_IN_FLIGHT` |
 | `TRANSLATOR_PROXY_MODEL_RUNTIME_SEED` |
+| `TRANSLATOR_PROXY_MODEL_RUNTIME_NUM_CTX` |
+| `TRANSLATOR_PROXY_MODEL_RUNTIME_KEEP_ALIVE_SECS` |
+| `TRANSLATOR_PROXY_MODEL_RUNTIME_WARM_UP` |
 | `TRANSLATOR_PROXY_LANGUAGES_SUPPORTED_PAIRS` |
 | `TRANSLATOR_PROXY_LANGUAGES_DEFAULT_FROM` |
 | `TRANSLATOR_PROXY_LANGUAGES_DEFAULT_TO` |

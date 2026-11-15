@@ -45,6 +45,14 @@ pub struct ModelRuntimeConfig {
     pub max_in_flight: usize,
     /// Deterministic sampling seed.
     pub seed: i64,
+    /// Context window pinned on every request, in tokens, so the model fits
+    /// VRAM instead of inheriting the runtime's server-wide context.
+    pub num_ctx: u32,
+    /// Seconds the model stays loaded after the last request; -1 keeps it
+    /// loaded forever.
+    pub keep_alive_secs: i64,
+    /// Whether startup translates one warm-up line to load the model.
+    pub warm_up: bool,
 }
 
 /// The fixed source-to-target allowlist and its fallbacks.
@@ -91,6 +99,9 @@ impl Default for ModelRuntimeConfig {
             timeout_secs: 5,
             max_in_flight: 4,
             seed: 12345,
+            num_ctx: 8192,
+            keep_alive_secs: 1800,
+            warm_up: true,
         }
     }
 }
@@ -169,6 +180,21 @@ impl Config {
                         .parse()
                         .with_context(|| format!("invalid {key} value {value:?}"))?;
                 }
+                "TRANSLATOR_PROXY_MODEL_RUNTIME_NUM_CTX" => {
+                    self.model_runtime.num_ctx = value
+                        .parse()
+                        .with_context(|| format!("invalid {key} value {value:?}"))?;
+                }
+                "TRANSLATOR_PROXY_MODEL_RUNTIME_KEEP_ALIVE_SECS" => {
+                    self.model_runtime.keep_alive_secs = value
+                        .parse()
+                        .with_context(|| format!("invalid {key} value {value:?}"))?;
+                }
+                "TRANSLATOR_PROXY_MODEL_RUNTIME_WARM_UP" => {
+                    self.model_runtime.warm_up = value
+                        .parse()
+                        .with_context(|| format!("invalid {key} value {value:?}"))?;
+                }
                 "TRANSLATOR_PROXY_LANGUAGES_SUPPORTED_PAIRS" => {
                     self.languages.supported_pairs = parse_pairs(&value)
                         .with_context(|| format!("invalid {key} value {value:?}"))?;
@@ -219,6 +245,12 @@ impl Config {
         }
         if self.model_runtime.max_in_flight == 0 {
             bail!("model_runtime.max_in_flight must be greater than zero");
+        }
+        if self.model_runtime.num_ctx == 0 {
+            bail!("model_runtime.num_ctx must be greater than zero");
+        }
+        if self.model_runtime.keep_alive_secs < -1 {
+            bail!("model_runtime.keep_alive_secs must be at least -1");
         }
 
         if self.languages.supported_pairs.is_empty() {
@@ -317,6 +349,14 @@ mod tests {
     }
 
     #[test]
+    fn model_runtime_tuning_defaults() {
+        let config = Config::default();
+        assert_eq!(config.model_runtime.num_ctx, 8192);
+        assert_eq!(config.model_runtime.keep_alive_secs, 1800);
+        assert!(config.model_runtime.warm_up);
+    }
+
+    #[test]
     fn toml_overrides_defaults() {
         let config = Config::from_toml_str(
             r#"
@@ -358,6 +398,9 @@ mod tests {
                 ("TRANSLATOR_PROXY_MODEL_RUNTIME_TIMEOUT_SECS", "9"),
                 ("TRANSLATOR_PROXY_MODEL_RUNTIME_MAX_IN_FLIGHT", "7"),
                 ("TRANSLATOR_PROXY_MODEL_RUNTIME_SEED", "42"),
+                ("TRANSLATOR_PROXY_MODEL_RUNTIME_NUM_CTX", "4096"),
+                ("TRANSLATOR_PROXY_MODEL_RUNTIME_KEEP_ALIVE_SECS", "-1"),
+                ("TRANSLATOR_PROXY_MODEL_RUNTIME_WARM_UP", "false"),
                 (
                     "TRANSLATOR_PROXY_LANGUAGES_SUPPORTED_PAIRS",
                     "ja:en, zh-CN : en",
@@ -378,6 +421,9 @@ mod tests {
         assert_eq!(config.model_runtime.timeout_secs, 9);
         assert_eq!(config.model_runtime.max_in_flight, 7);
         assert_eq!(config.model_runtime.seed, 42);
+        assert_eq!(config.model_runtime.num_ctx, 4096);
+        assert_eq!(config.model_runtime.keep_alive_secs, -1);
+        assert!(!config.model_runtime.warm_up);
         assert_eq!(
             config.languages.supported_pairs,
             vec![
@@ -387,6 +433,43 @@ mod tests {
         );
         assert_eq!(config.languages.default_from, "ja");
         assert_eq!(config.prompt.system_message, "translate");
+    }
+
+    #[test]
+    fn zero_num_ctx_is_rejected() {
+        let mut config = Config::default();
+        config
+            .apply_env_overrides(env(&[("TRANSLATOR_PROXY_MODEL_RUNTIME_NUM_CTX", "0")]))
+            .expect("num_ctx value parses");
+        let err = config.finish().expect_err("zero num_ctx must be rejected");
+        assert!(err.to_string().contains("num_ctx"));
+    }
+
+    #[test]
+    fn keep_alive_secs_below_minus_one_is_rejected() {
+        let mut config = Config::default();
+        config
+            .apply_env_overrides(env(&[(
+                "TRANSLATOR_PROXY_MODEL_RUNTIME_KEEP_ALIVE_SECS",
+                "-2",
+            )]))
+            .expect("keep_alive_secs value parses");
+        let err = config
+            .finish()
+            .expect_err("keep_alive_secs below -1 must be rejected");
+        assert!(err.to_string().contains("keep_alive_secs"));
+    }
+
+    #[test]
+    fn non_bool_warm_up_override_is_rejected() {
+        let mut config = Config::default();
+        let err = config
+            .apply_env_overrides(env(&[("TRANSLATOR_PROXY_MODEL_RUNTIME_WARM_UP", "maybe")]))
+            .expect_err("non-bool warm_up must be rejected");
+        assert!(
+            err.to_string()
+                .contains("TRANSLATOR_PROXY_MODEL_RUNTIME_WARM_UP")
+        );
     }
 
     #[test]
