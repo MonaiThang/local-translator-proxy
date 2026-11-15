@@ -9,7 +9,9 @@ listen_addr = "127.0.0.1:5000"
 [model_runtime]
 # Ollama-compatible non-streaming chat endpoint.
 endpoint = "http://127.0.0.1:11434/api/chat"
-model = "gemma2:9b"
+# TranslateGemma 4B: about 3.3 GB of weights, leaving room for the game on an
+# 8 GB card. Any installed Ollama model can be named here.
+model = "translategemma:4b"
 # Deadline for one whole Translation Unit, in seconds.
 timeout_secs = 5
 # Maximum concurrent calls to the Model Runtime.

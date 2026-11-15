@@ -160,9 +160,14 @@ $env:RUST_LOG = "info,local_translator_proxy::pipeline=error"
 For the reference Model Runtime:
 
 ```sh
-ollama pull gemma2:9b
+ollama pull translategemma:4b
 ollama serve
 ```
+
+The default `model_runtime.model` is Google's TranslateGemma 4B, about 3.3 GB of
+weights, which leaves room for the game on an 8 GB card. The 12B and 27B builds
+need more VRAM than that leaves, so they are not the default. Point
+`model_runtime.model` at any other installed model to use a different one.
 
 ## Configuration
 
@@ -175,7 +180,7 @@ overrides below.
 |---|---|---|
 | `server.listen_addr` | `127.0.0.1:5000` | Loopback address to bind |
 | `model_runtime.endpoint` | `http://127.0.0.1:11434/api/chat` | Model Runtime chat endpoint |
-| `model_runtime.model` | `gemma2:9b` | Model name sent to the runtime |
+| `model_runtime.model` | `translategemma:4b` | Model name sent to the runtime |
 | `model_runtime.timeout_secs` | `5` | Deadline for one whole Translation Unit |
 | `model_runtime.max_in_flight` | `4` | Maximum concurrent Model Runtime calls |
 | `model_runtime.seed` | `12345` | Deterministic sampling seed |

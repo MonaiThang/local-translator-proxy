@@ -1,0 +1,237 @@
+{
+  "version": 1,
+  "from": "zh-CN",
+  "to": "en",
+  "entries": [
+    {
+      "id": "dialogue-greeting",
+      "category": "dialogue",
+      "source": "欢迎来到风语村，旅行者。",
+      "reference": "Welcome to Windwhisper Village, traveler.",
+      "must_preserve": []
+    },
+    {
+      "id": "dialogue-quest-intro",
+      "category": "dialogue",
+      "source": "北边的森林里最近出现了奇怪的生物。",
+      "reference": "Strange creatures have appeared in the forest to the north.",
+      "must_preserve": []
+    },
+    {
+      "id": "dialogue-reward",
+      "category": "dialogue",
+      "source": "如果你愿意帮忙，我会好好酬谢你。",
+      "reference": "If you're willing to help, I'll reward you well.",
+      "must_preserve": []
+    },
+    {
+      "id": "dialogue-companion",
+      "category": "dialogue",
+      "source": "别担心，我会一直陪着你。",
+      "reference": "Don't worry, I'll stay by your side.",
+      "must_preserve": []
+    },
+    {
+      "id": "dialogue-farewell",
+      "category": "dialogue",
+      "source": "路上小心，愿风指引你的道路。",
+      "reference": "Travel safely, and may the wind guide your path.",
+      "must_preserve": []
+    },
+    {
+      "id": "dialogue-warning",
+      "category": "dialogue",
+      "source": "前面就是禁地了，现在回头还来得及。",
+      "reference": "The forbidden grounds lie ahead. There is still time to turn back.",
+      "must_preserve": []
+    },
+    {
+      "id": "punctuation-question",
+      "category": "punctuation",
+      "source": "你确定要离开吗？",
+      "reference": "Are you sure you want to leave?",
+      "must_preserve": []
+    },
+    {
+      "id": "punctuation-ellipsis-exclamation",
+      "category": "punctuation",
+      "source": "这……怎么可能！",
+      "reference": "This... how is that possible!",
+      "must_preserve": []
+    },
+    {
+      "id": "punctuation-quotes",
+      "category": "punctuation",
+      "source": "“钥匙就在祭坛下面，”老人低声说道。",
+      "reference": "\"The key is beneath the altar,\" the old man whispered.",
+      "must_preserve": []
+    },
+    {
+      "id": "punctuation-em-dash",
+      "category": "punctuation",
+      "source": "小心——前面有埋伏！",
+      "reference": "Careful—there's an ambush ahead!",
+      "must_preserve": []
+    },
+    {
+      "id": "punctuation-colon-list",
+      "category": "punctuation",
+      "source": "任务完成：击败10只史莱姆。",
+      "reference": "Quest complete: defeat 10 slimes.",
+      "must_preserve": []
+    },
+    {
+      "id": "ui-settings",
+      "category": "ui",
+      "source": "设置",
+      "reference": "Settings",
+      "must_preserve": []
+    },
+    {
+      "id": "ui-continue",
+      "category": "ui",
+      "source": "继续游戏",
+      "reference": "Continue",
+      "must_preserve": []
+    },
+    {
+      "id": "ui-autosave",
+      "category": "ui",
+      "source": "自动保存中，请勿关闭游戏。",
+      "reference": "Autosaving. Do not close the game.",
+      "must_preserve": []
+    },
+    {
+      "id": "combat-critical",
+      "category": "combat",
+      "source": "暴击！造成128点伤害。",
+      "reference": "Critical hit! Dealt 128 damage.",
+      "must_preserve": []
+    },
+    {
+      "id": "combat-low-health",
+      "category": "combat",
+      "source": "你的生命值过低，快使用治疗药水！",
+      "reference": "Your health is low. Use a healing potion!",
+      "must_preserve": []
+    },
+    {
+      "id": "combat-stun",
+      "category": "combat",
+      "source": "敌人被眩晕了3秒。",
+      "reference": "The enemy is stunned for 3 seconds.",
+      "must_preserve": []
+    },
+    {
+      "id": "item-shortsword",
+      "category": "item",
+      "source": "生锈的短剑",
+      "reference": "Rusty Shortsword",
+      "must_preserve": []
+    },
+    {
+      "id": "item-potion-effect",
+      "category": "item",
+      "source": "使用后恢复50点生命值。",
+      "reference": "Restores 50 health when used.",
+      "must_preserve": []
+    },
+    {
+      "id": "item-rare-material",
+      "category": "item",
+      "source": "稀有材料，可用于锻造传说武器。",
+      "reference": "A rare material used to forge legendary weapons.",
+      "must_preserve": []
+    },
+    {
+      "id": "colour-attack",
+      "category": "colour",
+      "source": "[FF7700]攻击力[-]+5",
+      "reference": "[FF7700]Attack[-] +5",
+      "must_preserve": ["[FF7700]", "[-]"]
+    },
+    {
+      "id": "colour-save-failed",
+      "category": "colour",
+      "source": "保存失败，请[FF0000]重新启动游戏[-]。",
+      "reference": "Save failed. Please [FF0000]restart the game[-].",
+      "must_preserve": ["[FF0000]", "[-]"]
+    },
+    {
+      "id": "colour-health-full",
+      "category": "colour",
+      "source": "[00FF00]生命值已满[-]",
+      "reference": "[00FF00]Health is full[-]",
+      "must_preserve": ["[00FF00]", "[-]"]
+    },
+    {
+      "id": "markup-bold-quality",
+      "category": "markup",
+      "source": "<b>传说</b>品质的武器拥有额外属性。",
+      "reference": "Weapons of <b>legendary</b> quality have extra attributes.",
+      "must_preserve": ["<b>", "</b>"]
+    },
+    {
+      "id": "markup-gold-chest",
+      "category": "markup",
+      "source": "<color=#FFD700>黄金宝箱</color>",
+      "reference": "<color=#FFD700>Golden Chest</color>",
+      "must_preserve": ["<color=#FFD700>", "</color>"]
+    },
+    {
+      "id": "markup-size",
+      "category": "markup",
+      "source": "按<size=120%>空格键</size>跳跃",
+      "reference": "Press <size=120%>Space</size> to jump",
+      "must_preserve": ["<size=120%>", "</size>"]
+    },
+    {
+      "id": "markup-sprite",
+      "category": "markup",
+      "source": "装备<sprite name=\"sword\"/>后攻击范围扩大。",
+      "reference": "Equipping <sprite name=\"sword\"/> expands your attack range.",
+      "must_preserve": ["<sprite name=\"sword\"/>"],
+      "notes": "Self-closing sprite tag with a quoted attribute."
+    },
+    {
+      "id": "line-break-two-lines",
+      "category": "line-break",
+      "source": "第一行\\n第二行",
+      "reference": "First line\\nSecond line",
+      "must_preserve": ["\\n"],
+      "notes": "Literal backslash-n Rendering Token, not a physical line break."
+    },
+    {
+      "id": "line-break-quest-return",
+      "category": "line-break",
+      "source": "请先完成任务\\n再回来找我。",
+      "reference": "Complete the quest first,\\nthen come back to me.",
+      "must_preserve": ["\\n"],
+      "notes": "Literal backslash-n with surrounding punctuation."
+    },
+    {
+      "id": "square-bracket-save",
+      "category": "square-bracket",
+      "source": "[FF7700]保存[-]设置后重新启动",
+      "reference": "[FF7700]Save[-] the settings and restart.",
+      "must_preserve": ["[FF7700]", "[-]"],
+      "notes": "Issue #18 case: output must not escape the brackets as \\u005b."
+    },
+    {
+      "id": "square-bracket-warning",
+      "category": "square-bracket",
+      "source": "[FF7700]警告：[-]背包已满。",
+      "reference": "[FF7700]Warning:[-] Your bag is full.",
+      "must_preserve": ["[FF7700]", "[-]"],
+      "notes": "Colour tag wraps a word that carries a colon."
+    },
+    {
+      "id": "square-bracket-pickup",
+      "category": "square-bracket",
+      "source": "拾取[00CCFF]魔力水晶[-]×3",
+      "reference": "Picked up [00CCFF]Mana Crystal[-] ×3",
+      "must_preserve": ["[00CCFF]", "[-]"],
+      "notes": "Two colour tags plus a trailing quantity."
+    }
+  ]
+}

@@ -96,7 +96,7 @@ async fn sends_expected_request_and_parses_content() {
     assert_eq!(requests.len(), 1);
     let request = &requests[0];
 
-    assert_eq!(request["model"], "gemma2:9b");
+    assert_eq!(request["model"], "translategemma:4b");
     assert_eq!(request["stream"], false);
     assert_eq!(request["options"]["temperature"], 0);
     assert_eq!(request["options"]["seed"], 12345);

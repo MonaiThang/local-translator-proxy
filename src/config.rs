@@ -87,7 +87,7 @@ impl Default for ModelRuntimeConfig {
     fn default() -> Self {
         Self {
             endpoint: "http://127.0.0.1:11434/api/chat".to_string(),
-            model: "gemma2:9b".to_string(),
+            model: "translategemma:4b".to_string(),
             timeout_secs: 5,
             max_in_flight: 4,
             seed: 12345,
