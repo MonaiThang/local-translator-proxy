@@ -24,6 +24,8 @@ pub struct RuntimeClient {
     endpoint: String,
     model: String,
     seed: i64,
+    num_ctx: u32,
+    keep_alive_secs: i64,
     system_message: String,
 }
 
@@ -66,6 +68,7 @@ struct ChatRequest<'a> {
     model: &'a str,
     messages: [ChatMessage; 2],
     stream: bool,
+    keep_alive: i64,
     options: ChatOptions,
 }
 
@@ -79,6 +82,7 @@ struct ChatMessage {
 struct ChatOptions {
     temperature: u8,
     seed: i64,
+    num_ctx: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -98,6 +102,8 @@ impl RuntimeClient {
             endpoint: config.endpoint.clone(),
             model: config.model.clone(),
             seed: config.seed,
+            num_ctx: config.num_ctx,
+            keep_alive_secs: config.keep_alive_secs,
             system_message: prompt.system_message.clone(),
         })
     }
@@ -125,9 +131,11 @@ impl RuntimeClient {
                 },
             ],
             stream: false,
+            keep_alive: self.keep_alive_secs,
             options: ChatOptions {
                 temperature: 0,
                 seed: self.seed,
+                num_ctx: self.num_ctx,
             },
         };
 
@@ -151,6 +159,20 @@ impl RuntimeClient {
                 RuntimeError::Decode
             }
         })?;
+
+        let load_duration_ms = value
+            .get("load_duration")
+            .and_then(Value::as_u64)
+            .map(|ns| ns / 1_000_000);
+        let total_duration_ms = value
+            .get("total_duration")
+            .and_then(Value::as_u64)
+            .map(|ns| ns / 1_000_000);
+        tracing::debug!(
+            ?load_duration_ms,
+            ?total_duration_ms,
+            "model runtime call durations"
+        );
 
         parse_response(&value, line)
     }
@@ -503,6 +525,8 @@ mod tests {
             endpoint: "http://127.0.0.1:1/api/chat".to_string(),
             model: "test".to_string(),
             seed: 1,
+            num_ctx: 8192,
+            keep_alive_secs: 1800,
             system_message: "Translate.\n".to_string(),
         };
         assert_eq!(

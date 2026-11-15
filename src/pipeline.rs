@@ -28,6 +28,29 @@ pub struct AppState {
     pub pipeline: Arc<Pipeline>,
 }
 
+/// One short line translated at startup to load the model before the first
+/// game request.
+const WARM_UP_TEXT: &str = "你好";
+
+/// Outcome of the best-effort startup warm-up.
+#[derive(Debug)]
+pub enum WarmUp {
+    /// `model_runtime.warm_up` is false; nothing was sent.
+    Disabled,
+    /// The warm-up line was translated and the model is loaded.
+    Warmed {
+        /// Time from warm-up start to the finished call.
+        elapsed: Duration,
+    },
+    /// The warm-up call failed; the proxy serves anyway.
+    Failed {
+        /// Time from warm-up start to the failure.
+        elapsed: Duration,
+        /// The runtime error that ended the warm-up.
+        error: RuntimeError,
+    },
+}
+
 /// The end-to-end translation pipeline.
 ///
 /// One instance is shared across requests; the semaphore caps concurrent model
@@ -47,6 +70,41 @@ impl Pipeline {
             config,
             runtime,
             permits,
+        }
+    }
+
+    /// Translate [`WARM_UP_TEXT`] once so the model is loaded before the first
+    /// game request.
+    ///
+    /// Best effort: a failure is reported and never retried, and the
+    /// process-wide in-flight cap still holds while the call runs.
+    pub async fn warm_up(&self) -> WarmUp {
+        if !self.config.model_runtime.warm_up {
+            return WarmUp::Disabled;
+        }
+
+        let started = Instant::now();
+        let _permit = self
+            .permits
+            .acquire()
+            .await
+            .expect("the in-flight limiter is never closed");
+        match self
+            .runtime
+            .translate_line(
+                WARM_UP_TEXT,
+                &self.config.languages.default_from,
+                &self.config.languages.default_to,
+            )
+            .await
+        {
+            Ok(_) => WarmUp::Warmed {
+                elapsed: started.elapsed(),
+            },
+            Err(error) => WarmUp::Failed {
+                elapsed: started.elapsed(),
+                error,
+            },
         }
     }
 
@@ -94,22 +152,31 @@ impl Pipeline {
 
         let timeout_secs = self.config.model_runtime.timeout_secs;
         let line_count = units.len();
-        let deadline = Instant::now() + Duration::from_secs(timeout_secs);
+        let started = Instant::now();
+        let deadline = started + Duration::from_secs(timeout_secs);
         tracing::debug!(line_count, %from, %to, "translating unit");
 
         // The deadline covers the whole Translation Unit: permit waits, every
         // model call, and token verification. A single slow line cannot consume
         // more than the unit's remaining budget.
-        match tokio::time::timeout_at(deadline, self.run_unit(&segments, units, &from, &to)).await {
+        match tokio::time::timeout_at(
+            deadline,
+            self.run_unit(&segments, units, &from, &to, started),
+        )
+        .await
+        {
             Ok(Some(output)) => {
                 tracing::debug!(line_count, "translation unit completed");
                 output
             }
             Ok(None) => text.to_string(),
             Err(_) => {
+                let elapsed_ms = started.elapsed().as_millis() as u64;
                 tracing::warn!(
                     timeout_secs,
                     line_count,
+                    elapsed_ms,
+                    model = %self.config.model_runtime.model,
                     text = ?text,
                     "translation unit timed out; returning the original unit"
                 );
@@ -124,6 +191,7 @@ impl Pipeline {
         units: Vec<(usize, String, Vec<Token>)>,
         from: &str,
         to: &str,
+        started: Instant,
     ) -> Option<String> {
         let mut tasks = JoinSet::new();
         for (index, line, source_tokens) in units {
@@ -148,6 +216,8 @@ impl Pipeline {
                     let original = lines::reassemble(segments);
                     tracing::warn!(
                         %failure,
+                        elapsed_ms = started.elapsed().as_millis() as u64,
+                        model = %self.config.model_runtime.model,
                         text = ?original,
                         "line translation failed; returning the original unit"
                     );
@@ -158,6 +228,8 @@ impl Pipeline {
                     let original = lines::reassemble(segments);
                     tracing::warn!(
                         %error,
+                        elapsed_ms = started.elapsed().as_millis() as u64,
+                        model = %self.config.model_runtime.model,
                         text = ?original,
                         "line translation task failed; returning the original unit"
                     );

@@ -17,6 +17,13 @@ timeout_secs = 5
 # Maximum concurrent calls to the Model Runtime.
 max_in_flight = 4
 seed = 12345
+# Context pinned on every request so the model fits VRAM. An Ollama model
+# otherwise inherits 131072 tokens, which spills an 8 GB card to CPU.
+num_ctx = 8192
+# Seconds the model stays loaded between bursts. -1 keeps it loaded forever.
+keep_alive_secs = 1800
+# Load the model at startup with one short translation. Best effort.
+warm_up = true
 
 [languages]
 # Fixed allowlist of source-to-target pairs. No aliases in v1.

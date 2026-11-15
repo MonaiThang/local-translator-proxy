@@ -32,8 +32,8 @@ GET /any/path?text=...&from=...&to=...
 
 | Module | Responsibility | Key entry points |
 |---|---|---|
-| `src/lib.rs` | Wires config, runtime client, pipeline, and router | `build_router` |
-| `src/main.rs` | Process lifecycle, logging, graceful shutdown | `main` |
+| `src/lib.rs` | Builds the shared startup state and wires config, runtime client, pipeline, and router | `build_state`, `build_router_from_state`, `build_router` |
+| `src/main.rs` | Process lifecycle, logging, startup warm-up, graceful shutdown | `main` |
 | `src/config.rs` | TOML + env overrides, normalization, validation | `Config::load`, `validate` |
 | `src/language.rs` | Tag normalization and allowlist resolution | `resolve_pair` |
 | `src/http.rs` | Any-path handler and lenient query parsing | `handle`, `parse_query` |
@@ -53,6 +53,8 @@ GET /any/path?text=...&from=...&to=...
 - `timeout_secs` bounds the whole Translation Unit, including permit waits,
   model calls, and verification.
 - `max_in_flight` caps concurrent Model Runtime calls across the process.
+- `num_ctx` and `keep_alive` ride on every Model Runtime request, so the model
+  never inherits the runtime's server-wide context.
 - Model calls are stateless: no retries and no caching.
 
 ## Where to change what

@@ -69,6 +69,20 @@ For real translation, point the endpoint at Ollama. Source text and its verified
 translation print at the default `info` level; use `$env:RUST_LOG = "debug"` to
 add per-unit timing and expected-passthrough diagnostics.
 
+## Latency bench
+
+Build in release, start the proxy against a running Model Runtime, and run
+
+```powershell
+pwsh scripts/bench.ps1 -TextFile scripts/bench-lines.txt -Count 200
+```
+
+The script reports the cold first request as `cold_ms`, separate from warm min,
+median, p95, and max over the remaining requests. It exits 1 when any line
+passes through or p95 exceeds its budget. `ollama stop translategemma:4b`
+forces a cold load on the next run. `ollama ps` should report the model at
+100% GPU.
+
 ## Conventions
 
 - One commit per issue, with the issue number in the subject.

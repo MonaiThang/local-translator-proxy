@@ -11,6 +11,9 @@ model = "translategemma:4b"
 timeout_secs = 5
 max_in_flight = 4
 seed = 12345
+num_ctx = 8192
+keep_alive_secs = 1800
+warm_up = true
 
 [languages]
 supported_pairs = [["zh-CN", "en"]]

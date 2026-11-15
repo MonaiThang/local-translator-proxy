@@ -5,6 +5,9 @@ use std::time::{Duration, Instant};
 use axum::Router;
 use axum::http::StatusCode;
 use local_translator_proxy::build_router;
+use local_translator_proxy::build_router_from_state;
+use local_translator_proxy::build_state;
+use local_translator_proxy::pipeline::WarmUp;
 
 async fn app(behavior: common::Behavior) -> (Router, common::MockState) {
     app_with(behavior, 1, 4).await
@@ -22,6 +25,58 @@ async fn app_with(
 
 fn encode(text: &str) -> String {
     urlencoding::encode(text).into_owned()
+}
+
+#[tokio::test]
+async fn enabled_warm_up_sends_one_request_and_reports_warmed() {
+    let (endpoint, state) = common::spawn_runtime(common::Behavior::Echo).await;
+    let config = common::test_config(endpoint);
+    let app_state = build_state(config).expect("state builds");
+
+    let result = app_state.pipeline.warm_up().await;
+    assert!(
+        matches!(result, WarmUp::Warmed { .. }),
+        "warm-up: {result:?}"
+    );
+    assert_eq!(common::request_count(&state), 1);
+}
+
+#[tokio::test]
+async fn disabled_warm_up_reports_disabled_and_sends_nothing() {
+    let (endpoint, state) = common::spawn_runtime(common::Behavior::Echo).await;
+    let mut config = common::test_config(endpoint);
+    config.model_runtime.warm_up = false;
+    let app_state = build_state(config).expect("state builds");
+
+    let result = app_state.pipeline.warm_up().await;
+    assert!(matches!(result, WarmUp::Disabled), "warm-up: {result:?}");
+    assert_eq!(common::request_count(&state), 0);
+}
+
+#[tokio::test]
+async fn failed_warm_up_reports_failed_and_the_proxy_still_serves() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    drop(listener);
+    let config = common::test_config(format!("http://{addr}/api/chat"));
+    let app_state = build_state(config).expect("state builds");
+
+    let result = app_state.pipeline.warm_up().await;
+    assert!(
+        matches!(result, WarmUp::Failed { .. }),
+        "warm-up: {result:?}"
+    );
+
+    let app = build_router_from_state(app_state);
+    let original = "你好";
+    let (status, content_type, body) =
+        common::request(&app, "GET", &format!("/?text={}", encode(original))).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(content_type, "text/plain; charset=utf-8");
+    assert_eq!(body, original);
 }
 
 #[tokio::test]
@@ -510,8 +565,29 @@ async fn logs_timeout_at_warn_with_the_original_unit() {
     assert!(logs.contains("timed out"), "logs: {logs}");
     assert!(logs.contains("timeout_secs=1"), "logs: {logs}");
     assert!(logs.contains("line_count=2"), "logs: {logs}");
+    assert!(logs.contains("elapsed_ms="), "logs: {logs}");
+    assert!(logs.contains("model=translategemma:4b"), "logs: {logs}");
     assert!(logs.contains(r#"text="a\nb""#), "logs: {logs}");
     assert!(!logs.contains("line translated"), "logs: {logs}");
+}
+
+#[tokio::test]
+async fn logs_runtime_timeout_with_elapsed_and_model() {
+    // A single line cannot lose the whole-unit deadline to permit queueing, so
+    // on some platforms the client timeout reports first. Either warning must
+    // still carry the duration and model name.
+    let (app, _) = app_with(common::Behavior::Delay(Duration::from_secs(2)), 1, 4).await;
+    let original = "你好";
+    let ((status, _, body), logs) = common::capture_logs("local_translator_proxy=info", || async {
+        common::request(&app, "GET", &format!("/?text={}", encode(original))).await
+    })
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, original);
+    assert!(logs.contains("timed out"), "logs: {logs}");
+    assert!(logs.contains("elapsed_ms="), "logs: {logs}");
+    assert!(logs.contains("model=translategemma:4b"), "logs: {logs}");
 }
 
 #[tokio::test]
