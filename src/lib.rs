@@ -14,6 +14,7 @@ pub mod http;
 pub mod language;
 pub mod lines;
 pub mod pipeline;
+pub(crate) mod plan;
 pub mod runtime;
 pub mod tokens;
 

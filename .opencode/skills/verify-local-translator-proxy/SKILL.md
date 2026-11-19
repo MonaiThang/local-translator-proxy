@@ -76,7 +76,8 @@ Scenarios, each one real user path end to end:
 |---|---|
 | `translate` | One supported line is translated; one model call. |
 | `multi-line-tokens` | `\r\n` survives; each non-blank line is translated; `<b>` tokens survive. |
-| `passthrough-mismatch` | A model answer that drops a Rendering Token yields the original unit. |
+| `passthrough-mismatch` | A dropped Rendering Token that also corrupts the span retry yields the original unit. |
+| `recover-dropped-token` | The issue #22 line drops `[-]` on the whole-line call and recovers through two span calls with tokens verbatim. |
 | `passthrough-injected-newline` | A model answer containing a real newline yields the original unit. |
 | `passthrough-timeout` | A slow runtime yields the original unit inside the unit deadline. |
 | `passthrough-runtime-down` | A closed runtime endpoint yields the original unit, still `200`; a failed startup warm-up is logged and does not stop the proxy. |
@@ -142,9 +143,11 @@ pwsh -NoProfile -File .opencode/skills/verify-local-translator-proxy/scripts/ver
   `-Scenario` accepts the table above; `-ProxyPort`/`-StubPort` isolate the run.
 - `scripts/runtime-stub.mjs` — deterministic Ollama-compatible `/api/chat`
   stand-in. `STUB_MODE` is `translate` (prefix `EN:`), `echo`, `mismatch`
-  (drops tokens), `inject` (adds a newline), or `fail` (HTTP 500).
-  `GET /requests` lists every line that reached the model; `POST /reset` clears
-  it; `GET /health` reports readiness.
+  (drops tokens and adds an extra token so recovery fails),
+  `recover-dropped-token` (drops tokens on the whole line, then prefixes spans),
+  `inject` (adds a newline), or `fail` (HTTP 500). `GET /requests` lists every
+  line that reached the model; `POST /reset` clears it; `GET /health` reports
+  readiness.
 
 ## Coverage record
 

@@ -11,8 +11,8 @@
 
 .PARAMETER Scenario
   doctor | translate | multi-line-tokens | passthrough-mismatch |
-  passthrough-injected-newline | passthrough-timeout | passthrough-runtime-down |
-  no-model-call | warm-up
+  recover-dropped-token | passthrough-injected-newline | passthrough-timeout |
+  passthrough-runtime-down | no-model-call | warm-up
 
 .PARAMETER ProxyPort
   Loopback port for the proxy. Default 5099 (never the game's 5000).
@@ -29,6 +29,7 @@ param(
         'translate',
         'multi-line-tokens',
         'passthrough-mismatch',
+        'recover-dropped-token',
         'passthrough-injected-newline',
         'passthrough-timeout',
         'passthrough-runtime-down',
@@ -140,6 +141,7 @@ switch ($Scenario) {
     'translate' { }
     'multi-line-tokens' { }
     'passthrough-mismatch' { $stubMode = 'mismatch' }
+    'recover-dropped-token' { $stubMode = 'recover-dropped-token' }
     'passthrough-injected-newline' { $stubMode = 'inject' }
     'passthrough-timeout' { $stubDelayMs = 3000; $timeoutSecs = 1 }
     'passthrough-runtime-down' { $runStub = $false; $timeoutSecs = 2; $warmUp = $true }
@@ -221,7 +223,22 @@ try {
             $result = Invoke-Proxy '<b>你好</b>'
             Add-Check 'status is 200' ($result.status -eq 200) "status=$($result.status)"
             Add-Check 'dropped token yields the original bytes' ($result.bodyUtf8 -ceq '<b>你好</b>') "body=$($result.bodyUtf8)"
-            Add-Check 'one model call was attempted' ((Get-StubRequests).Count -eq 1) "modelCalls=$((Get-StubRequests).Count)"
+            Add-Check 'whole-line and span calls were attempted' ((Get-StubRequests).Count -eq 2) "modelCalls=$((Get-StubRequests).Count)"
+        }
+        'recover-dropped-token' {
+            $source = '[FF7700]ＴＡＢ[-]键可切换视角的距离，让你看的更清楚些'
+            $expected = '[FF7700]EN:ＴＡＢ[-]EN:键可切换视角的距离，让你看的更清楚些'
+            $result = Invoke-Proxy $source
+            Add-Check 'status is 200' ($result.status -eq 200) "status=$($result.status)"
+            Add-Check 'content type is plain UTF-8 text' ($result.contentType -like 'text/plain*charset=utf-8*') "contentType=$($result.contentType)"
+            Add-Check 'issue 22 line is translated with exact tokens' ($result.bodyUtf8 -ceq $expected) "body=$($result.bodyUtf8)"
+            $modelLines = @(Get-StubRequests | ForEach-Object { $_.line })
+            Add-Check 'whole line then two text spans reached the model' (
+                $modelLines.Count -eq 3 -and
+                $modelLines[0] -ceq $source -and
+                $modelLines[1] -ceq 'ＴＡＢ' -and
+                $modelLines[2] -ceq '键可切换视角的距离，让你看的更清楚些'
+            ) "lines=$($modelLines -join ' | ')"
         }
         'passthrough-injected-newline' {
             $result = Invoke-Proxy '你好'
@@ -299,7 +316,17 @@ try {
     # The proxy's redirected stdout is not readable while it runs on Windows.
     # Read proxy.log only after the processes above are stopped.
     $proxyLogPath = Join-Path $evidence 'proxy.log'
-    $proxyLog = if (Test-Path $proxyLogPath) { [IO.File]::ReadAllText($proxyLogPath) } else { '' }
+    $proxyLog = ''
+    for ($attempt = 0; $attempt -lt 20; $attempt++) {
+        try {
+            if (Test-Path $proxyLogPath) {
+                $proxyLog = [IO.File]::ReadAllText($proxyLogPath)
+            }
+            break
+        } catch {
+            Start-Sleep -Milliseconds 100
+        }
+    }
     foreach ($expectation in $expectedLog) {
         Add-Check $expectation.name $proxyLog.Contains($expectation.pattern) "proxy.log contains `"$($expectation.pattern)`""
     }

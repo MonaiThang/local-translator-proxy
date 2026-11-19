@@ -32,6 +32,8 @@ pub enum Behavior {
     Delay(Duration),
     InjectNewline,
     DoubleEscapedBrackets,
+    DropTokenAndPrefix(&'static str),
+    CorruptEveryRequest(&'static str),
     FailWhenContaining(&'static str),
     ReplaceWhenContaining {
         needle: &'static str,
@@ -206,6 +208,15 @@ async fn mock_handler(State(state): State<MockState>, Json(body): Json<Value>) -
         Behavior::DoubleEscapedBrackets => {
             translated(&line.replace('[', r"\u005b").replace(']', r"\u005d"))
         }
+        Behavior::DropTokenAndPrefix(prefix) => {
+            let without_tokens = line.replace("[FF7700]", "").replace("[-]", "");
+            if line.contains("[FF7700]") || line.contains("[-]") {
+                translated(&format!("{prefix}{without_tokens}"))
+            } else {
+                translated(&format!("{prefix}{line}"))
+            }
+        }
+        Behavior::CorruptEveryRequest(suffix) => translated(&format!("{line}{suffix}")),
         Behavior::FailWhenContaining(needle) if line.contains(needle) => {
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
