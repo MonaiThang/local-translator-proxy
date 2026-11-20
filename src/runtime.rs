@@ -214,8 +214,17 @@ fn parse_response(value: &Value, source: &str) -> Result<String, RuntimeError> {
 /// Deserialize the strict structured payload, repair double-escaped unicode,
 /// and reject an empty translation.
 fn parse_translation(content: &str, source: &str) -> Result<String, RuntimeError> {
-    let output: TranslationOutput =
-        serde_json::from_str(content).map_err(|_| RuntimeError::Schema)?;
+    let output: TranslationOutput = if let Ok(output) = serde_json::from_str(content) {
+        output
+    } else {
+        let repaired = repair_trailing_tag_quote(content).ok_or(RuntimeError::Schema)?;
+        tracing::debug!(
+            source = ?source,
+            content = ?content,
+            "repaired missing closing quote after trailing tag"
+        );
+        serde_json::from_str(&repaired).map_err(|_| RuntimeError::Schema)?
+    };
     let translation = decode_literal_escapes(&output.translation, source);
     if translation != output.translation {
         tracing::debug!(
@@ -231,10 +240,10 @@ fn parse_translation(content: &str, source: &str) -> Result<String, RuntimeError
 /// Normalize assistant content before JSON parsing.
 ///
 /// Models often wrap the structured payload in a Markdown fence even when told
-/// not to, and they may add surrounding whitespace. One fence (three or more
-/// backticks, optionally tagged `json`) that wraps the whole payload is
-/// removed. Prose outside the fence is left in place and fails schema
-/// validation.
+/// not to, and they may add surrounding whitespace or omit the closing fence.
+/// One leading fence (three or more backticks, optionally tagged `json`) is
+/// removed when a JSON object follows. Prose outside the fence is left in place
+/// and fails schema validation.
 fn normalize_assistant_content(content: &str) -> &str {
     let trimmed = content.trim();
     let opening = trimmed.len() - trimmed.trim_start_matches('`').len();
@@ -243,18 +252,39 @@ fn normalize_assistant_content(content: &str) -> &str {
     }
     let after_opening = &trimmed[opening..];
     let closing = after_opening.len() - after_opening.trim_end_matches('`').len();
-    if closing < opening {
-        return trimmed;
-    }
-    let inner = after_opening[..after_opening.len() - closing].trim();
-    if inner
+    let inner = if closing >= opening {
+        after_opening[..after_opening.len() - closing].trim()
+    } else {
+        after_opening.trim()
+    };
+    let payload = if inner
         .get(..4)
         .is_some_and(|tag| tag.eq_ignore_ascii_case("json"))
     {
         inner[4..].trim()
     } else {
         inner
+    };
+    if payload.starts_with('{') {
+        payload
+    } else {
+        trimmed
     }
+}
+
+/// Repair the wire deviation seen on short tagged lines: the model closes the
+/// object with `}` directly after a trailing `[-]`, omitting the JSON string's
+/// closing `"`. Anything else stays a schema failure.
+fn repair_trailing_tag_quote(content: &str) -> Option<String> {
+    let trimmed = content.trim();
+    if !trimmed.starts_with("{\"translation\"") || !trimmed.ends_with("[-]}") {
+        return None;
+    }
+    let mut repaired = String::with_capacity(trimmed.len() + 1);
+    repaired.push_str(&trimmed[..trimmed.len() - 1]);
+    repaired.push('"');
+    repaired.push('}');
+    Some(repaired)
 }
 
 /// Decode one remaining layer of JSON-style `\uXXXX` escapes that the model
@@ -399,6 +429,43 @@ mod tests {
             "message": { "content": "````json\n{\"translation\":\"Hello\"}\n````" }
         });
         assert_eq!(parse_response(&value, "").expect("translation"), "Hello");
+    }
+
+    #[test]
+    fn parses_translation_missing_quote_after_trailing_tag() {
+        let value = json!({
+            "message": {
+                "content": r#"{"translation": "[FF3030]Lunge attack - Bleeding [-]}"#
+            }
+        });
+        assert_eq!(
+            parse_response(&value, "[FF3030]撩剑式-流血[-]").expect("translation"),
+            "[FF3030]Lunge attack - Bleeding [-]"
+        );
+    }
+
+    #[test]
+    fn parses_unclosed_fence_with_missing_quote_after_trailing_tag() {
+        let value = json!({
+            "message": {
+                "content": "```json\n{\"translation\": \"[6E5528]The most basic bait. [-]}"
+            }
+        });
+        assert_eq!(
+            parse_response(&value, "[6E5528]最基本的鱼饵。[-]").expect("translation"),
+            "[6E5528]The most basic bait. [-]"
+        );
+    }
+
+    #[test]
+    fn still_rejects_other_malformed_translation_envelopes() {
+        let value = json!({
+            "message": { "content": r#"{"translation": "Hello""# }
+        });
+        assert!(matches!(
+            parse_response(&value, ""),
+            Err(RuntimeError::Schema)
+        ));
     }
 
     #[test]
