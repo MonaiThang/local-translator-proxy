@@ -402,6 +402,44 @@ mod tests {
     }
 
     #[test]
+    fn parses_translation_missing_quote_after_trailing_tag() {
+        let value = json!({
+            "message": {
+                "content": r#"{"translation": "[FF3030]Lunge attack - Bleeding [-]}"#
+            }
+        });
+        assert_eq!(
+            parse_response(&value, "[FF3030]撩剑式-流血[-]").expect("translation"),
+            "[FF3030]Lunge attack - Bleeding [-]"
+        );
+    }
+
+    #[test]
+    fn parses_unclosed_fence_with_missing_quote_after_trailing_tag() {
+        let value = json!({
+            "message": {
+                "content": "```json\n{\"translation\": \"[6E5528]The most basic bait. [-]}"
+            }
+        });
+        assert_eq!(
+            parse_response(&value, "[6E5528]最基本的鱼饵。[-]").expect("translation"),
+            "[6E5528]The most basic bait. [-]"
+        );
+    }
+
+    #[test]
+    fn still_rejects_other_malformed_translation_envelopes() {
+        let value = json!({
+            "message": { "content": r#"{"translation": "Hello""# }
+        });
+        assert!(matches!(
+            parse_response(&value, ""),
+            Err(RuntimeError::Schema)
+        ));
+    }
+
+
+    #[test]
     fn rejects_prose_wrapped_fenced_message_content() {
         let value = json!({
             "message": {
