@@ -16,6 +16,7 @@ use tokio::time::Instant;
 use crate::config::Config;
 use crate::language;
 use crate::lines::{self, Segment};
+use crate::plan::{LinePlan, RecoveryError};
 use crate::runtime::{RuntimeClient, RuntimeError};
 use crate::tokens::{self, Token, TokenError};
 
@@ -200,11 +201,16 @@ impl Pipeline {
             let from = from.to_string();
             let to = to.to_string();
             tasks.spawn(async move {
-                let _permit = permits
-                    .acquire_owned()
-                    .await
-                    .map_err(|_| LineFailure::Closed)?;
-                translate_line(runtime.as_ref(), index, line, source_tokens, &from, &to).await
+                translate_line(
+                    runtime.as_ref(),
+                    permits.as_ref(),
+                    index,
+                    line,
+                    source_tokens,
+                    &from,
+                    &to,
+                )
+                .await
             });
         }
 
@@ -268,26 +274,40 @@ impl Pipeline {
 
 async fn translate_line(
     runtime: &RuntimeClient,
+    permits: &Semaphore,
     index: usize,
     line: String,
     source_tokens: Vec<Token>,
     from: &str,
     to: &str,
 ) -> Result<(usize, String), LineFailure> {
-    let translated = runtime
-        .translate_line(&line, from, to)
-        .await
-        .map_err(LineFailure::Runtime)?;
+    let translated = call_model(permits, runtime, &line, from, to).await?;
 
     let translated_tokens = match tokens::extract(&translated) {
         Ok(tokens) => tokens,
         Err(error) => {
-            let reason = error.to_string();
-            log_rejected(index, &line, &translated, from, to, &reason);
+            if !source_tokens.is_empty() {
+                tracing::debug!(
+                    line = index,
+                    reason = %error,
+                    "whole-line translation rejected; retrying by text spans"
+                );
+                return recover_line(runtime, permits, index, &line, source_tokens, from, to).await;
+            }
+            log_rejected(index, &line, &translated, from, to, &error.to_string());
             return Err(LineFailure::MalformedTranslation(error));
         }
     };
+
     if !tokens::matches(&source_tokens, &translated_tokens) {
+        if !source_tokens.is_empty() {
+            tracing::debug!(
+                line = index,
+                reason = "rendering token mismatch",
+                "whole-line translation rejected; retrying by text spans"
+            );
+            return recover_line(runtime, permits, index, &line, source_tokens, from, to).await;
+        }
         log_rejected(
             index,
             &line,
@@ -298,6 +318,7 @@ async fn translate_line(
         );
         return Err(LineFailure::TokenMismatch);
     }
+
     if translated.contains(['\r', '\n']) {
         log_rejected(
             index,
@@ -311,6 +332,75 @@ async fn translate_line(
     }
 
     Ok((index, translated))
+}
+
+async fn recover_line(
+    runtime: &RuntimeClient,
+    permits: &Semaphore,
+    index: usize,
+    line: &str,
+    source_tokens: Vec<Token>,
+    from: &str,
+    to: &str,
+) -> Result<(usize, String), LineFailure> {
+    let plan = match LinePlan::of(line, source_tokens) {
+        Ok(plan) => plan,
+        Err(error) => {
+            tracing::warn!(
+                line = index,
+                from = %from,
+                to = %to,
+                source = ?line,
+                reason = %error,
+                "span recovery failed; returning the original unit"
+            );
+            return Err(LineFailure::Recovery(error));
+        }
+    };
+
+    let mut translated = Vec::new();
+    for text in plan.texts() {
+        translated.push(call_model(permits, runtime, text, from, to).await?);
+    }
+
+    match plan.render(&translated) {
+        Ok(recovered) => {
+            tracing::debug!(
+                line = index,
+                from = %from,
+                to = %to,
+                source = ?line,
+                translated = ?recovered,
+                "line recovered by text spans"
+            );
+            Ok((index, recovered))
+        }
+        Err(error) => {
+            tracing::warn!(
+                line = index,
+                from = %from,
+                to = %to,
+                source = ?line,
+                reason = %error,
+                "span recovery failed; returning the original unit"
+            );
+            Err(LineFailure::Recovery(error))
+        }
+    }
+}
+
+async fn call_model(
+    permits: &Semaphore,
+    runtime: &RuntimeClient,
+    input: &str,
+    from: &str,
+    to: &str,
+) -> Result<String, LineFailure> {
+    let _permit = permits.acquire().await.map_err(|_| LineFailure::Closed)?;
+    runtime
+        .translate_line(input, from, to)
+        .await
+        .map_err(LineFailure::Runtime)
 }
 
 fn log_rejected(index: usize, source: &str, rejected: &str, from: &str, to: &str, reason: &str) {
@@ -331,6 +421,7 @@ enum LineFailure {
     MalformedTranslation(TokenError),
     TokenMismatch,
     InjectedLineBreak,
+    Recovery(RecoveryError),
     Closed,
 }
 
@@ -343,6 +434,7 @@ impl std::fmt::Display for LineFailure {
             }
             Self::TokenMismatch => write!(formatter, "rendering token mismatch"),
             Self::InjectedLineBreak => write!(formatter, "translation injected a line break"),
+            Self::Recovery(error) => write!(formatter, "recovery failed: {error}"),
             Self::Closed => write!(formatter, "in-flight limiter is closed"),
         }
     }

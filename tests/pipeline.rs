@@ -195,17 +195,42 @@ async fn double_escaped_bracket_tokens_are_restored() {
 
 #[tokio::test]
 async fn bracket_token_mismatch_returns_the_whole_original_unit() {
-    let (app, _) = app(common::Behavior::ReplaceWhenContaining {
-        needle: "[FF7700]",
-        replacement: "",
-    })
-    .await;
+    let (app, _) = app(common::Behavior::CorruptEveryRequest("[FF0000]")).await;
     let original = "ok\npick [FF7700]two[-] herbs";
     let (status, _, body) =
         common::request(&app, "GET", &format!("/?text={}", encode(original))).await;
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body, original);
+}
+
+#[tokio::test]
+async fn issue_22_dropped_closing_bracket_token_is_recovered() {
+    let (app, state) = app(common::Behavior::DropTokenAndPrefix("EN: ")).await;
+    let original = "[FF7700]ＴＡＢ[-]键可切换视角的距离，让你看的更清楚些";
+    let (status, content_type, body) =
+        common::request(&app, "GET", &format!("/?text={}", encode(original))).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(content_type, "text/plain; charset=utf-8");
+    assert_ne!(body, original);
+    assert!(body.contains("EN: "), "body: {body}");
+    let opening = body.find("[FF7700]").expect("opening token");
+    let closing = body.find("[-]").expect("closing token");
+    assert!(opening < closing, "body: {body}");
+    assert!(common::request_count(&state) > 1);
+}
+
+#[tokio::test]
+async fn recovery_calls_stay_under_the_in_flight_cap() {
+    let (app, state) = app_with(common::Behavior::DropTokenAndPrefix("EN: "), 5, 1).await;
+    let original = "[FF7700]ＴＡＢ[-]键可切换视角的距离";
+    let (status, _, body) =
+        common::request(&app, "GET", &format!("/?text={}", encode(original))).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, "[FF7700]EN: ＴＡＢ[-]EN: 键可切换视角的距离");
+    assert_eq!(common::peak_in_flight(&state), 1);
 }
 
 #[tokio::test]
@@ -270,11 +295,7 @@ async fn logs_repaired_escapes_at_debug() {
 
 #[tokio::test]
 async fn token_mismatch_returns_the_whole_original_unit() {
-    let (app, _) = app(common::Behavior::ReplaceWhenContaining {
-        needle: "<color=red>",
-        replacement: "<color=blue>",
-    })
-    .await;
+    let (app, _) = app(common::Behavior::CorruptEveryRequest("[FF0000]")).await;
     let original = "ok\n<color=red>Hello</color>";
     let (status, _, body) =
         common::request(&app, "GET", &format!("/?text={}", encode(original))).await;
@@ -403,13 +424,9 @@ async fn logs_verified_lines_at_info_in_source_order() {
 }
 
 #[tokio::test]
-async fn logs_rejected_translation_at_warn_and_the_original_unit() {
-    let (app, _) = app(common::Behavior::ReplaceWhenContaining {
-        needle: "<color=red>",
-        replacement: "<color=blue>",
-    })
-    .await;
-    let original = "ok\n<color=red>Hello</color>";
+async fn logs_failed_recovery_at_warn_and_the_original_unit() {
+    let (app, _) = app(common::Behavior::CorruptEveryRequest("[FF0000]")).await;
+    let original = "<color=red>Hello</color>";
     let ((status, _, body), logs) = common::capture_logs("local_translator_proxy=info", || async {
         common::request(&app, "GET", &format!("/?text={}", encode(original))).await
     })
@@ -417,32 +434,22 @@ async fn logs_rejected_translation_at_warn_and_the_original_unit() {
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body, original);
-    assert!(logs.contains("translation rejected"), "logs: {logs}");
-    assert!(logs.contains("line=1"), "logs: {logs}");
+    assert!(logs.contains("span recovery failed"), "logs: {logs}");
     assert!(
         logs.contains(r#"source="<color=red>Hello</color>""#),
         "logs: {logs}"
     );
-    assert!(
-        logs.contains(r#"rejected="<color=blue>Hello</color>""#),
-        "logs: {logs}"
-    );
-    assert!(logs.contains("rendering token mismatch"), "logs: {logs}");
+    assert!(logs.contains("rendering token drift"), "logs: {logs}");
     assert!(logs.contains("line translation failed"), "logs: {logs}");
     assert!(
-        logs.contains(r#"text="ok\n<color=red>Hello</color>""#),
+        logs.contains(r#"text="<color=red>Hello</color>""#),
         "logs: {logs}"
     );
-    assert!(!logs.contains("line=0"), "logs: {logs}");
 }
 
 #[tokio::test]
 async fn logs_malformed_translated_tokens_as_rejected() {
-    let (app, _) = app(common::Behavior::ReplaceWhenContaining {
-        needle: "<b>",
-        replacement: r#"<b class="x">"#,
-    })
-    .await;
+    let (app, _) = app(common::Behavior::CorruptEveryRequest(r#"<b class="x">"#)).await;
     let original = "<b>Hello</b>";
     let ((status, _, body), logs) = common::capture_logs("local_translator_proxy=info", || async {
         common::request(&app, "GET", &format!("/?text={}", encode(original))).await
@@ -451,12 +458,8 @@ async fn logs_malformed_translated_tokens_as_rejected() {
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body, original);
-    assert!(logs.contains("translation rejected"), "logs: {logs}");
+    assert!(logs.contains("span recovery failed"), "logs: {logs}");
     assert!(logs.contains("malformed rendering token"), "logs: {logs}");
-    assert!(
-        logs.contains(r#"rejected="<b class=\"x\">Hello</b>""#),
-        "logs: {logs}"
-    );
     assert!(logs.contains("line translation failed"), "logs: {logs}");
 }
 

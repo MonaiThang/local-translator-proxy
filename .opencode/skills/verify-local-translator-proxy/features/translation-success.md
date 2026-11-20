@@ -10,6 +10,7 @@ and every physical line ending is copied from the source.
 - `multi-line` translates each non-blank line and reassembles the unit.
 - `separators` preserves `\r\n`, `\r`, and `\n` exactly where the source had them.
 - `tokens` keeps every `<...>` and `[RRGGBB]`/`[-]` Rendering Token unchanged.
+- `token-loss-recovery` rebuilds a rejected line from text spans and source tokens.
 - `blank-lines` leaves blank physical lines out of the model calls and in place.
 
 ## How to get to it (user POV)
@@ -37,6 +38,11 @@ Preconditions:
   `-Scenario multi-line-tokens`. The request is `你好\r\n<b>世界</b>`; the body
   hex contains `0D0A` between the lines, both `<b>` and `</b>` survive, and the
   summary reports exactly two model calls.
+- **Dropped closing token.** Run the helper with
+  `-Scenario recover-dropped-token`. The request is the issue #22 line; the
+  whole-line stub answer drops `[FF7700]` and `[-]`, then two span answers carry
+  `EN:`. The body has both tokens in source order, the spans are translated, and
+  the stub log shows one whole-line call followed by two span calls.
 - **Blank line in the middle.** From a manual run with
   `TRANSLATOR_PROXY_MODEL_RUNTIME_WARM_UP=false`, request
   `text=你好\r\n\r\n世界` and confirm the empty middle line is returned

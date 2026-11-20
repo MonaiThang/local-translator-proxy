@@ -6,7 +6,8 @@
 //
 // Environment:
 //   STUB_PORT      loopback port to listen on (default 7331)
-//   STUB_MODE      translate | echo | mismatch | inject | fail (default translate)
+//   STUB_MODE      translate | echo | mismatch | recover-dropped-token | inject | fail
+//                  (default translate)
 //   STUB_DELAY_MS  delay before answering, for deadline tests (default 0)
 //
 // Control endpoints:
@@ -40,9 +41,19 @@ function translationFor(line) {
     case "echo":
       return line;
     case "mismatch":
-      // Drops every angle-bracket and NGUI bracket token, so any tokenized
-      // line fails positional verification.
-      return line.replace(/<[^>]*>/g, "").replace(/\[[0-9A-Fa-f]{6}\]/g, "").replace(/\[-\]/g, "");
+      // Drops tokens, then appends an unexpected token so the span retry also
+      // fails positional verification.
+      return `${line
+        .replace(/<[^>]*>/g, "")
+        .replace(/\[[0-9A-Fa-f]{6}\]/g, "")
+        .replace(/\[-\]/g, "")}[FF0000]`;
+    case "recover-dropped-token":
+      // The first call drops tokens like issue #22. Span calls contain no
+      // tokens, so they return prefixed text and the proxy can rebuild the line.
+      return `EN:${line
+        .replace(/<[^>]*>/g, "")
+        .replace(/\[[0-9A-Fa-f]{6}\]/g, "")
+        .replace(/\[-\]/g, "")}`;
     case "inject":
       // A real newline in the translation must be rejected.
       return `EN:${line}\n`;
