@@ -41,6 +41,9 @@ pub struct ModelRuntimeConfig {
     pub model: String,
     /// Wall-clock deadline for one whole Translation Unit, in seconds.
     pub timeout_secs: u64,
+    /// Per-call budget for startup warm-up, in seconds. A cold model load can
+    /// take longer than `timeout_secs`.
+    pub warm_up_timeout_secs: u64,
     /// Maximum concurrent Model Runtime calls across the process.
     pub max_in_flight: usize,
     /// Deterministic sampling seed.
@@ -97,6 +100,7 @@ impl Default for ModelRuntimeConfig {
             endpoint: "http://127.0.0.1:11434/api/chat".to_string(),
             model: "translategemma:4b".to_string(),
             timeout_secs: 5,
+            warm_up_timeout_secs: 30,
             max_in_flight: 4,
             seed: 12345,
             num_ctx: 8192,
@@ -167,6 +171,11 @@ impl Config {
                 "TRANSLATOR_PROXY_MODEL_RUNTIME_MODEL" => self.model_runtime.model = value,
                 "TRANSLATOR_PROXY_MODEL_RUNTIME_TIMEOUT_SECS" => {
                     self.model_runtime.timeout_secs = value
+                        .parse()
+                        .with_context(|| format!("invalid {key} value {value:?}"))?;
+                }
+                "TRANSLATOR_PROXY_MODEL_RUNTIME_WARM_UP_TIMEOUT_SECS" => {
+                    self.model_runtime.warm_up_timeout_secs = value
                         .parse()
                         .with_context(|| format!("invalid {key} value {value:?}"))?;
                 }
@@ -242,6 +251,9 @@ impl Config {
         }
         if self.model_runtime.timeout_secs == 0 {
             bail!("model_runtime.timeout_secs must be greater than zero");
+        }
+        if self.model_runtime.warm_up_timeout_secs == 0 {
+            bail!("model_runtime.warm_up_timeout_secs must be greater than zero");
         }
         if self.model_runtime.max_in_flight == 0 {
             bail!("model_runtime.max_in_flight must be greater than zero");
@@ -354,6 +366,40 @@ mod tests {
         assert_eq!(config.model_runtime.num_ctx, 8192);
         assert_eq!(config.model_runtime.keep_alive_secs, 1800);
         assert!(config.model_runtime.warm_up);
+    }
+
+    #[test]
+    fn warm_up_timeout_defaults_to_thirty_seconds() {
+        assert_eq!(Config::default().model_runtime.warm_up_timeout_secs, 30);
+    }
+
+    #[test]
+    fn warm_up_timeout_env_override() {
+        let mut config = Config::default();
+        config
+            .apply_env_overrides(env(&[(
+                "TRANSLATOR_PROXY_MODEL_RUNTIME_WARM_UP_TIMEOUT_SECS",
+                "45",
+            )]))
+            .expect("warm-up timeout value parses");
+        config.finish().expect("valid config");
+
+        assert_eq!(config.model_runtime.warm_up_timeout_secs, 45);
+    }
+
+    #[test]
+    fn zero_warm_up_timeout_is_rejected() {
+        let mut config = Config::default();
+        config
+            .apply_env_overrides(env(&[(
+                "TRANSLATOR_PROXY_MODEL_RUNTIME_WARM_UP_TIMEOUT_SECS",
+                "0",
+            )]))
+            .expect("warm-up timeout value parses");
+        let err = config
+            .finish()
+            .expect_err("zero warm-up timeout must be rejected");
+        assert!(err.to_string().contains("warm_up_timeout_secs"));
     }
 
     #[test]

@@ -42,6 +42,21 @@ async fn enabled_warm_up_sends_one_request_and_reports_warmed() {
 }
 
 #[tokio::test]
+async fn warm_up_waits_longer_than_the_unit_deadline() {
+    let (endpoint, state) =
+        common::spawn_runtime(common::Behavior::Delay(Duration::from_millis(1500))).await;
+    let config = common::test_config_with(endpoint, 1, 4);
+    let app_state = build_state(config).expect("state builds");
+
+    let result = app_state.pipeline.warm_up().await;
+    assert!(
+        matches!(result, WarmUp::Warmed { .. }),
+        "warm-up: {result:?}"
+    );
+    assert_eq!(common::request_count(&state), 1);
+}
+
+#[tokio::test]
 async fn disabled_warm_up_reports_disabled_and_sends_nothing() {
     let (endpoint, state) = common::spawn_runtime(common::Behavior::Echo).await;
     let mut config = common::test_config(endpoint);

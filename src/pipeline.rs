@@ -92,10 +92,11 @@ impl Pipeline {
             .expect("the in-flight limiter is never closed");
         match self
             .runtime
-            .translate_line(
+            .translate_line_with_timeout(
                 WARM_UP_TEXT,
                 &self.config.languages.default_from,
                 &self.config.languages.default_to,
+                Duration::from_secs(self.config.model_runtime.warm_up_timeout_secs),
             )
             .await
         {

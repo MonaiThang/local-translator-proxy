@@ -14,6 +14,8 @@ endpoint = "http://127.0.0.1:11434/api/chat"
 model = "translategemma:4b"
 # Deadline for one whole Translation Unit, in seconds.
 timeout_secs = 5
+# A cold model load can exceed timeout_secs; warm-up gets its own budget.
+warm_up_timeout_secs = 30
 # Maximum concurrent calls to the Model Runtime.
 max_in_flight = 4
 seed = 12345

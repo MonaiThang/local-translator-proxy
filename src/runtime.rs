@@ -18,9 +18,12 @@ use crate::config::{ModelRuntimeConfig, PromptConfig};
 ///
 /// The wire shape is the Ollama chat-completions surface: a non-streaming
 /// `POST /api/chat` with a system + user message and deterministic options.
+/// Every call gets a per-call timeout; a caller can override it with
+/// [`RuntimeClient::translate_line_with_timeout`].
 #[derive(Clone)]
 pub struct RuntimeClient {
     client: reqwest::Client,
+    timeout: Duration,
     endpoint: String,
     model: String,
     seed: i64,
@@ -34,7 +37,7 @@ pub struct RuntimeClient {
 pub enum RuntimeError {
     /// Connection refused, DNS failure, or another transport error.
     Unreachable,
-    /// The request exceeded the configured HTTP timeout.
+    /// The call exceeded its per-call timeout.
     Timeout,
     /// The runtime returned a non-2xx status.
     HttpStatus(u16),
@@ -93,12 +96,11 @@ struct TranslationOutput {
 
 impl RuntimeClient {
     pub fn new(config: &ModelRuntimeConfig, prompt: &PromptConfig) -> anyhow::Result<Self> {
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(config.timeout_secs))
-            .build()?;
+        let client = reqwest::Client::builder().build()?;
 
         Ok(Self {
             client,
+            timeout: Duration::from_secs(config.timeout_secs),
             endpoint: config.endpoint.clone(),
             model: config.model.clone(),
             seed: config.seed,
@@ -110,9 +112,32 @@ impl RuntimeClient {
 
     /// Translate one physical line.
     ///
-    /// The caller owns the Translation Unit deadline; this client additionally
-    /// applies the configured HTTP timeout.
+    /// The caller owns the Translation Unit deadline. This call uses the
+    /// client's configured per-call timeout.
     pub async fn translate_line(
+        &self,
+        line: &str,
+        from: &str,
+        to: &str,
+    ) -> Result<String, RuntimeError> {
+        self.translate_line_with_timeout(line, from, to, self.timeout)
+            .await
+    }
+
+    /// Translate one physical line with a caller-supplied per-call timeout.
+    pub async fn translate_line_with_timeout(
+        &self,
+        line: &str,
+        from: &str,
+        to: &str,
+        timeout: Duration,
+    ) -> Result<String, RuntimeError> {
+        tokio::time::timeout(timeout, self.send_and_parse(line, from, to))
+            .await
+            .map_err(|_| RuntimeError::Timeout)?
+    }
+
+    async fn send_and_parse(
         &self,
         line: &str,
         from: &str,
@@ -589,6 +614,7 @@ mod tests {
     fn appends_language_directive_to_system_message() {
         let client = RuntimeClient {
             client: reqwest::Client::new(),
+            timeout: Duration::from_secs(5),
             endpoint: "http://127.0.0.1:1/api/chat".to_string(),
             model: "test".to_string(),
             seed: 1,
