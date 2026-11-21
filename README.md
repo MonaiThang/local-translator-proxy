@@ -185,6 +185,11 @@ and the next unit pays another cold load.
 `model_runtime.warm_up` (default `true`) translates one short line at startup,
 best effort. A warm-up failure is logged at `warn` and the proxy serves anyway.
 
+`model_runtime.warm_up_timeout_secs` (default `30`) bounds the startup warm-up
+call. A cold Model Runtime load can take longer than `timeout_secs`, so warm-up
+uses its own budget. Game requests still use `timeout_secs` for the whole
+Translation Unit.
+
 `OLLAMA_NUM_PARALLEL` must be greater than 1. With `1`, Ollama serialises calls
 and a multi-line unit queues behind itself inside the 5 s deadline.
 
@@ -203,6 +208,7 @@ overrides below.
 | `model_runtime.endpoint` | `http://127.0.0.1:11434/api/chat` | Model Runtime chat endpoint |
 | `model_runtime.model` | `translategemma:4b` | Model name sent to the runtime |
 | `model_runtime.timeout_secs` | `5` | Deadline for one whole Translation Unit |
+| `model_runtime.warm_up_timeout_secs` | `30` | Per-call budget for startup warm-up; a cold model load can exceed `timeout_secs` |
 | `model_runtime.max_in_flight` | `4` | Maximum concurrent Model Runtime calls |
 | `model_runtime.seed` | `12345` | Deterministic sampling seed |
 | `model_runtime.num_ctx` | `8192` | Context window pinned on every request |
@@ -224,6 +230,7 @@ underscores inside section names, exactly as written here:
 | `TRANSLATOR_PROXY_MODEL_RUNTIME_ENDPOINT` |
 | `TRANSLATOR_PROXY_MODEL_RUNTIME_MODEL` |
 | `TRANSLATOR_PROXY_MODEL_RUNTIME_TIMEOUT_SECS` |
+| `TRANSLATOR_PROXY_MODEL_RUNTIME_WARM_UP_TIMEOUT_SECS` |
 | `TRANSLATOR_PROXY_MODEL_RUNTIME_MAX_IN_FLIGHT` |
 | `TRANSLATOR_PROXY_MODEL_RUNTIME_SEED` |
 | `TRANSLATOR_PROXY_MODEL_RUNTIME_NUM_CTX` |
