@@ -241,14 +241,22 @@ fn parse_response(value: &Value, source: &str) -> Result<String, RuntimeError> {
 fn parse_translation(content: &str, source: &str) -> Result<String, RuntimeError> {
     let output: TranslationOutput = if let Ok(output) = serde_json::from_str(content) {
         output
-    } else {
-        let repaired = repair_trailing_tag_quote(content).ok_or(RuntimeError::Schema)?;
+    } else if let Some(repaired) = repair_trailing_tag_quote(content) {
         tracing::debug!(
             source = ?source,
             content = ?content,
             "repaired missing closing quote after trailing tag"
         );
         serde_json::from_str(&repaired).map_err(|_| RuntimeError::Schema)?
+    } else if let Some(translation) = bare_translation(content) {
+        tracing::debug!(
+            source = ?source,
+            content = ?content,
+            "accepted bare translation content"
+        );
+        return non_empty(&translation);
+    } else {
+        return Err(RuntimeError::Schema);
     };
     let translation = decode_literal_escapes(&output.translation, source);
     if translation != output.translation {
@@ -260,6 +268,35 @@ fn parse_translation(content: &str, source: &str) -> Result<String, RuntimeError
         );
     }
     non_empty(&translation)
+}
+
+/// Accept plain model output when it contains no JSON object attempt.
+///
+/// Some models occasionally return the translation as plain text instead of the
+/// required `{"translation":"..."}` envelope. When the content has no `{` or `}`,
+/// it is not a broken or prose-wrapped JSON attempt, so the text is treated as
+/// the translation and still passes the pipeline's token and line-break checks.
+/// Obvious assistant preambles are rejected to avoid accepting explanations as
+/// translations.
+fn bare_translation(content: &str) -> Option<String> {
+    let trimmed = content.trim();
+    if trimmed.is_empty() || trimmed.contains('{') || trimmed.contains('}') {
+        return None;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    for prefix in [
+        "here is",
+        "here's",
+        "sure",
+        "of course",
+        "the translation",
+        "translation:",
+    ] {
+        if lower.starts_with(prefix) {
+            return None;
+        }
+    }
+    Some(trimmed.to_string())
 }
 
 /// Normalize assistant content before JSON parsing.
@@ -297,19 +334,27 @@ fn normalize_assistant_content(content: &str) -> &str {
     }
 }
 
-/// Repair the wire deviation seen on short tagged lines: the model closes the
-/// object with `}` directly after a trailing `[-]`, omitting the JSON string's
-/// closing `"`. Anything else stays a schema failure.
+/// Repair a missing closing quote on the `translation` string.
+///
+/// Models occasionally emit `{"translation":"...}` and drop the final `"` before
+/// the object close. Only this narrow shape is repaired: the content must be a
+/// single top-level JSON-like object with a `translation` key, and inserting a
+/// quote before the final `}` must produce valid `TranslationOutput`.
 fn repair_trailing_tag_quote(content: &str) -> Option<String> {
     let trimmed = content.trim();
-    if !trimmed.starts_with("{\"translation\"") || !trimmed.ends_with("[-]}") {
+    if !trimmed.starts_with("{\"translation\"") || !trimmed.ends_with('}') {
+        return None;
+    }
+    if serde_json::from_str::<TranslationOutput>(trimmed).is_ok() {
         return None;
     }
     let mut repaired = String::with_capacity(trimmed.len() + 1);
     repaired.push_str(&trimmed[..trimmed.len() - 1]);
     repaired.push('"');
     repaired.push('}');
-    Some(repaired)
+    serde_json::from_str::<TranslationOutput>(&repaired)
+        .ok()
+        .map(|_| repaired)
 }
 
 /// Decode one remaining layer of JSON-style `\uXXXX` escapes that the model
@@ -494,6 +539,52 @@ mod tests {
     }
 
     #[test]
+    fn accepts_bare_translation_text_without_json_wrapper() {
+        let value = json!({
+            "message": { "content": "Hello there" }
+        });
+        assert_eq!(
+            parse_response(&value, "你好").expect("translation"),
+            "Hello there"
+        );
+    }
+
+    #[test]
+    fn accepts_bare_translation_text_with_rendering_tokens() {
+        let value = json!({
+            "message": { "content": "[FF3030]Xiao Shi rides the dragon - Armor Break[-]" }
+        });
+        assert_eq!(
+            parse_response(&value, "[FF3030]萧史乘龙-破甲[-]").expect("translation"),
+            "[FF3030]Xiao Shi rides the dragon - Armor Break[-]"
+        );
+    }
+
+    #[test]
+    fn repairs_missing_quote_before_final_brace() {
+        let value = json!({
+            "message": { "content": r#"{"translation": "Hello}"# }
+        });
+        assert_eq!(
+            parse_response(&value, "你好").expect("translation"),
+            "Hello"
+        );
+    }
+
+    #[test]
+    fn repairs_missing_quote_with_trailing_tag_and_no_bracket_suffix() {
+        let value = json!({
+            "message": {
+                "content": r#"{"translation": "[2D2B1D][5E0B08]Bighead carp[-] has migratory habits}"#
+            }
+        });
+        assert_eq!(
+            parse_response(&value, "[2D2B1D][5E0B08]鳙鱼[-]具有洄游习性").expect("translation"),
+            "[2D2B1D][5E0B08]Bighead carp[-] has migratory habits"
+        );
+    }
+
+    #[test]
     fn rejects_prose_wrapped_fenced_message_content() {
         let value = json!({
             "message": {
@@ -542,7 +633,7 @@ mod tests {
             Err(RuntimeError::Schema)
         ));
         assert!(matches!(
-            parse_response(&json!({ "message": { "content": "not json" } }), ""),
+            parse_response(&json!({ "message": { "content": "not {json}" } }), ""),
             Err(RuntimeError::Schema)
         ));
     }

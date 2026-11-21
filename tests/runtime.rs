@@ -176,15 +176,15 @@ async fn invalid_json_is_a_decode_error() {
 }
 
 #[tokio::test]
-async fn garbage_content_is_a_schema_error() {
+async fn bare_content_without_json_is_accepted() {
     let (uri, _) = spawn(Behavior::GarbageContent).await;
     let client = client_for(&uri, 5);
 
-    let error = client
+    let translation = client
         .translate_line("你好", "zh-cn", "en")
         .await
-        .expect_err("schema error");
-    assert!(matches!(error, RuntimeError::Schema));
+        .expect("bare translation");
+    assert_eq!(translation, "not json");
 }
 
 #[tokio::test]
